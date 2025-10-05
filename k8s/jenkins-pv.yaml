@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: jenkins-pv-local
+spec:
+  capacity:
+    storage: 8Gi # The storage capacity
+  accessModes:
+    - ReadWriteOnce # Can only be mounted by one node
+  storageClassName: local-storage # Name of the storage class for this PV
+  persistentVolumeReclaimPolicy: Retain # Retain the PV even after the PVC is deleted
+  local:
+    path: /mnt/jenkins # The host path on the specified node
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: kubernetes.io/hostname
+          operator: In
+          values:
+          - pi-05 # Constrains this PV to the 'pi-05' node

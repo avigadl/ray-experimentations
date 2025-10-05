@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ray-jupyter-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ray-jupyter
+  template:
+    metadata:
+      labels:
+        app: ray-jupyter
+    spec:
+      containers:
+      - name: ray-jupyter-container
+        # Use the full path to your image in the local registry
+        image: avigadl/ray-jupyter-aarch64:latest
+        ports:
+        - containerPort: 8888 # Or whatever port your app uses
