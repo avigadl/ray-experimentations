@@ -6,11 +6,14 @@ FROM python:3.11-slim as base
 USER root
 
 # 1. Install Build Prerequisites and Core Utilities (needed for compiling Python AND installing code-server/Docker CLI)
+# 1. Install Build Prerequisites and Core Utilities (Including lsb-release)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    # Build tools for Python source compilation:
+    # ... (all your existing build packages) ...
+    # CRITICAL ADDITION: lsb-release
+    ca-certificates curl gnupg git wget lsb-release \
     build-essential libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev tk-dev \
-    # Tools needed for the rest of the file:
-    ca-certificates curl gnupg git wget \
+    \
+    # Clean up APT cache immediately to reduce final image size
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
