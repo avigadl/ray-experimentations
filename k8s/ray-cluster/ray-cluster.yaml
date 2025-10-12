@@ -1,0 +1,82 @@
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: raycluster-latest
+spec:
+  # ====== Head Pod Configuration ======
+  headGroupSpec:
+    rayStartParams:
+      dashboard-host: "0.0.0.0"
+    template:
+      spec:
+        containers:
+          - name: ray-head
+            # Updated to the latest version
+            image: "rayproject/ray:2.50.0-py311"
+            ports:
+              - containerPort: 6379
+              - containerPort: 8265
+              - containerPort: 10001
+            resources:
+              requests:
+                cpu: "1"
+                memory: "2Gi"
+              limits:
+                cpu: "2"
+                memory: "4Gi"
+  
+  # ====== Worker Pod Configurations ======
+  workerGroupSpecs:
+    # --- Worker Group 1: GPU worker (automatic scheduling) ---
+    - groupName: gpu-worker-group
+      replicas: 1
+      minReplicas: 1
+      maxReplicas: 5
+      rayStartParams: {}
+      template:
+        spec:
+          tolerations:
+            - key: "nvidia.com/gpu"
+              operator: "Exists"
+              effect: "NoSchedule"
+          containers:
+            - name: ray-gpu-worker
+              # Updated to the latest GPU version
+              image: "rayproject/ray:2.50.0-py311-gpu"
+              lifecycle:
+                preStop:
+                  exec:
+                    command: ["/bin/sh","-c","ray stop"]
+              resources:
+                requests:
+                  cpu: "2"
+                  memory: "4Gi"
+                  nvidia.com/gpu: "1" 
+                limits:
+                  cpu: "4"
+                  memory: "8Gi"
+                  nvidia.com/gpu: "1"
+
+    # --- Worker Group 2: The CPU worker (automatic scheduling) ---
+    - groupName: cpu-worker-group
+      replicas: 1
+      minReplicas: 1
+      maxReplicas: 5
+      rayStartParams: {}
+      template:
+        spec:
+          containers:
+            - name: ray-cpu-worker
+              # Updated to the latest version
+              image: "rayproject/ray:2.50.0-py311"
+              lifecycle:
+                preStop:
+                  exec:
+                    command: ["/bin/sh","-c","ray stop"]
+              resources:
+                requests:
+                  cpu: "2"
+                  memory: "8Gi"
+                limits:
+                  cpu: "4"
+                  memory: "16Gi"

@@ -1,0 +1,80 @@
+# Dockerfile.jupyter-notebook.amd64 - FINAL CORRECTED VERSION
+
+# Stage 1: Use a clean, multi-arch Python base image
+FROM python:3.11-slim as base
+
+USER root
+
+# 1. Install Build Prerequisites and Core Utilities (needed for compiling Python AND installing code-server/Docker CLI)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Build tools for Python source compilation:
+    build-essential libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev tk-dev \
+    # Tools needed for the rest of the file:
+    ca-certificates curl gnupg git wget \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- PYTHON 3.11.11 ALIGNMENT (CRITICAL FIX FOR VERSION MISMATCH) ---
+# The 'python:3.11-slim' image uses a recent 3.11.x, but NOT the specific 3.11.11 patch level.
+# We must compile 3.11.11 from source to perfectly match the server.
+
+ENV PYTHON_VERSION=3.11.11
+RUN set -ex \
+    && cd /usr/src \
+    && curl -O https://www.python.org/ftp/python/$PYTHON_VERSION/Python-$PYTHON_VERSION.tgz \
+    && tar -xf Python-$PYTHON_VERSION.tgz \
+    && cd Python-$PYTHON_VERSION \
+    \
+    # Compile and install Python 3.11.11 as an alternative install
+    && ./configure --enable-optimizations --with-ensurepip=install \
+    && make -j$(nproc) \
+    && make altinstall \
+    \
+    # Clean up and link the new binary
+    && rm -rf /usr/src/Python-$PYTHON_VERSION /usr/src/Python-$PYTHON_VERSION.tgz \
+    # Symlink the generic 'python3' command to our newly installed, correct version
+    && ln -s /usr/local/bin/python3.11 /usr/local/bin/python3
+
+# --- CODE-SERVER & DOCKER CLI INSTALLATION ---
+
+# 2. Install the code-server binary (Requires 'curl' and 'sh' which are present)
+ENV CODE_SERVER_VERSION=latest
+RUN curl -fsSL https://code-server.dev/install.sh | sh
+
+# 3. Install Docker CLI (Required for "Docker in Docker" functionality)
+RUN curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+RUN echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list
+RUN apt-get update && apt-get install -y docker-ce-cli
+
+# 4. Create and set up the 'coder' user
+# The python:slim image does NOT have the 'coder' user, so we must create it.
+RUN useradd -m -s /bin/bash -u 1000 coder
+# Add 'coder' user to the 'docker' group (which must be created)
+RUN groupadd docker || true
+RUN usermod -aG docker coder
+
+# --- VIRTUAL ENVIRONMENT AND PACKAGE INSTALLATION ---
+
+USER coder
+WORKDIR /home/coder
+
+# 5. Create the venv using the compiled Python 3.11.11
+# We use the symlinked 'python3' which points to our custom 3.11.11 installation.
+RUN python3 -m venv venv
+
+# 6. Install Ray, Jupyter, and core ML/Data packages into the venv
+RUN venv/bin/pip install --no-cache-dir "ray[all]" ipykernel jupyterlab notebook pandas scikit-learn
+
+# 7. Register the VENV as a Jupyter Kernel
+RUN /home/coder/venv/bin/python -m ipykernel install \
+    --name ray_py_3.11.11 \
+    --display-name "Ray Python 3.11.11 (VENV)" \
+    --user 
+
+# 8. Install VS Code extensions for the 'coder' user
+RUN code-server --install-extension ms-python.python \
+    && code-server --install-extension ms-toolsai.jupyter \
+    && code-server --install-extension eamodio.gitlens
+
+# Final command to start code-server
+CMD ["sh", "-c", ". /home/coder/venv/bin/activate && /usr/local/bin/code-server --bind-addr 0.0.0.0:8080 ."]
