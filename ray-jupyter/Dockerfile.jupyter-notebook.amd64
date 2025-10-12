@@ -24,12 +24,24 @@ RUN apt-get update && apt-get install -y docker-ce-cli
 RUN groupadd -g 999 docker || true
 RUN usermod -aG docker coder
 
-# Switch to the non-root user before creating the venv
+# --- NEW BLOCK FOR PYTHON 3.11.11 ALIGNMENT ---
+USER root
+RUN set -ex \
+    # 1. Download the specific Python 3.11.11 source code (Minimal intrusion)
+    && curl -fsSL https://www.python.org/ftp/python/3.11.11/Python-3.11.11.tgz -o /tmp/Python-3.11.11.tgz \
+    # 2. Extract it to /usr/src (This extracts the pre-compiled binaries if the image supports it)
+    && tar -xf /tmp/Python-3.11.11.tgz -C /usr/src \
+    # 3. Clean up the tarball
+    && rm /tmp/Python-3.11.11.tgz
+
+# Switch to the non-root user
 USER coder
 WORKDIR /home/coder
 
-# Create the virtual environment using Python's built-in venv module.
-RUN python3 -m venv venv
+# 4. Create the virtual environment using the *specific binary* from the extracted location
+#    Note: The specific path to the binary might vary slightly depending on the base OS.
+#    We use the path where the uncompressed binary is typically located after extraction/build.
+RUN /usr/src/Python-3.11.11/python -m venv venv
 
 # Use the pip from within the venv to install packages safely.
 RUN venv/bin/pip install "ray[all]" jupyterlab notebook pandas scikit-learn
