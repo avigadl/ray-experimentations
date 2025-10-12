@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: code-server-service
+spec:
+  # Use NodePort for simple external exposure
+  type: NodePort
+  selector:
+    # Match the 'labels' from your Deployment's Pod template
+    app: coder-server 
+  ports:
+    - protocol: TCP
+      # The port the Service itself listens on (internal to cluster)
+      port: 8080
+      # The port the container is listening on (from your Dockerfile)
+      targetPort: 8080 
+      # Optional: you can manually specify a NodePort (30000-32767) 
+      # or let K8s choose one automatically.
+      # nodePort: 30007
