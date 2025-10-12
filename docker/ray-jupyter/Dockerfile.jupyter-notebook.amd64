@@ -33,7 +33,7 @@ RUN set -ex \
     # Clean up and link the new binary
     && rm -rf /usr/src/Python-$PYTHON_VERSION /usr/src/Python-$PYTHON_VERSION.tgz \
     # Symlink the generic 'python3' command to our newly installed, correct version
-    && ln -s /usr/local/bin/python3.11 /usr/local/bin/python3
+    && ln -sf /usr/local/bin/python3.11 /usr/local/bin/python3
 
 # --- CODE-SERVER & DOCKER CLI INSTALLATION ---
 
