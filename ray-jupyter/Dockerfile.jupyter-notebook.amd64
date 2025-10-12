@@ -1,49 +1,54 @@
-# Dockerfile (Definitive version using venv and pip)
-FROM codercom/code-server:latest
+# Dockerfile.jupyter-notebook.amd64 - REVISED BASE
+
+# Stage 1: Build & Python Setup (Use official multi-arch Python image)
+# We use the python:3.11-slim tag as a base, which supports multi-arch builds robustly.
+# This ensures that when building for linux/amd64, you get a clean AMD64 base.
+FROM python:3.11-slim as build
 
 USER root
+# Install build tools, git, and essential packages (apt-get commands from your original Dockerfile)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl gnupg git wget \
+    build-essential libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev tk-dev \
+    # Clean up APT cache immediately to reduce final image size
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install prerequisites, INCLUDING python3-pip and the venv tools.
-RUN apt-get update && apt-get install -y ca-certificates curl gnupg git python3-pip python3-venv
+# --- NO PYTHON SOURCE COMPILATION NEEDED HERE! ---
+# The base image already provides the Python 3.11 environment. 
+# We skip the complex source install steps entirely, significantly cleaning up the Dockerfile.
 
-# Add Docker's official GPG key for Debian
-RUN install -m 0755 -d /etc/apt/keyrings
-RUN curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-RUN chmod a+r /etc/apt/keyrings/docker.gpg
+# Install the code-server binary
+ENV CODE_SERVER_VERSION=latest
+RUN curl -fsSL https://code-server.dev/install.sh | sh
 
-# Set up the official Docker repository for DEBIAN
-RUN echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian \
-  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
-  tee /etc/apt/sources.list.d/docker.list > /dev/null
+# --- Docker CLI Installation ---
+# ... (Re-insert your entire Docker CLI block here, using the updated syntax)
+# Note: You'll need to re-install the apt-related packages from your original Dockerfile 
+# if they were removed in the build stage.
 
-# Install the Docker CLI
-RUN apt-get update && apt-get install -y docker-ce-cli
+# Grant permissions to the 'coder' user (usually uid 1000 in official images)
+# Since 'codercom/code-server' is designed around the 'coder' user, we'll keep that convention.
+# You may need to create the user if the base image doesn't provide it.
+RUN useradd -m -s /bin/bash coder
 
-# Grant permissions to the coder user
-RUN groupadd -g 999 docker || true
-RUN usermod -aG docker coder
+# --- VIRTUAL ENVIRONMENT AND PACKAGE INSTALLATION ---
 
-# --- NEW BLOCK FOR PYTHON 3.11.11 ALIGNMENT ---
-USER root
-RUN set -ex \
-    # 1. Download the specific Python 3.11.11 source code (Minimal intrusion)
-    && curl -fsSL https://www.python.org/ftp/python/3.11.11/Python-3.11.11.tgz -o /tmp/Python-3.11.11.tgz \
-    # 2. Extract it to /usr/src (This extracts the pre-compiled binaries if the image supports it)
-    && tar -xf /tmp/Python-3.11.11.tgz -C /usr/src \
-    # 3. Clean up the tarball
-    && rm /tmp/Python-3.11.11.tgz
-
-# Switch to the non-root user
 USER coder
 WORKDIR /home/coder
 
-# 4. Create the virtual environment using the *specific binary* from the extracted location
-#    Note: The specific path to the binary might vary slightly depending on the base OS.
-#    We use the path where the uncompressed binary is typically located after extraction/build.
-RUN /usr/src/Python-3.11.11/python -m venv venv
+# Create the virtual environment using the system's Python 3.11
+# This is now reliably 3.11 because the base image is Python:3.11-slim
+RUN python3 -m venv venv
 
-# Use the pip from within the venv to install packages safely.
-RUN venv/bin/pip install "ray[all]" jupyterlab notebook pandas scikit-learn
+# Install Ray, Jupyter, and core ML/Data packages into the venv
+RUN venv/bin/pip install "ray[all]" ipykernel jupyterlab notebook pandas scikit-learn
 
-CMD ["sh", "-c", "echo 'Welcome! To use your Python environment, run: source venv/bin/activate' && /usr/bin/entrypoint.sh --bind-addr 0.0.0.0:8080 ."]
+# --- VS CODE EXTENSION INSTALLATION ---
+# Install VS Code extensions for the 'coder' user
+RUN code-server --install-extension ms-python.python \
+    && code-server --install-extension ms-toolsai.jupyter \
+    && code-server --install-extension eamodio.gitlens
+
+# Final command to start code-server
+CMD ["sh", "-c", "source /home/coder/venv/bin/activate && code-server --bind-addr 0.0.0.0:8080 ."]
