@@ -1,0 +1,37 @@
+# Dockerfile (Definitive version using venv and pip)
+FROM codercom/code-server:latest
+
+USER root
+
+# Install prerequisites, INCLUDING python3-pip and the venv tools.
+RUN apt-get update && apt-get install -y ca-certificates curl gnupg git python3-pip python3-venv
+
+# Add Docker's official GPG key for Debian
+RUN install -m 0755 -d /etc/apt/keyrings
+RUN curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+RUN chmod a+r /etc/apt/keyrings/docker.gpg
+
+# Set up the official Docker repository for DEBIAN
+RUN echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian \
+  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+  tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+# Install the Docker CLI
+RUN apt-get update && apt-get install -y docker-ce-cli
+
+# Grant permissions to the coder user
+RUN groupadd -g 999 docker || true
+RUN usermod -aG docker coder
+
+# Switch to the non-root user before creating the venv
+USER coder
+WORKDIR /home/coder
+
+# Create the virtual environment using Python's built-in venv module.
+RUN python3 -m venv venv
+
+# Use the pip from within the venv to install packages safely.
+RUN venv/bin/pip install "ray[all]" jupyterlab notebook pandas scikit-learn
+
+CMD ["sh", "-c", "echo 'Welcome! To use your Python environment, run: source venv/bin/activate' && /usr/bin/entrypoint.sh --bind-addr 0.0.0.0:8080 ."]
