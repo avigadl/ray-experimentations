@@ -1,2 +1,2 @@
-#Run on the local machine, to get firect access to the jupyter notebook
-kubectl port-forward code-server-deployment-79d98b98d7-{service}  8080:8080 -n dev-ide
+#Run on the local development machine, to get direct access to the jupyter notebook
+kubectl port-forward code-server-deployment-{service_id} 8080:8080 -n dev-ide --kubeconfig=/Users/avigadl/.kube/microk8s-config/kubeconfig.yaml
