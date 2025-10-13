@@ -66,7 +66,7 @@ WORKDIR /home/coder
 RUN python3 -m venv venv
 
 # 6. Install Ray, Jupyter, and core ML/Data packages into the venv
-RUN venv/bin/pip install --no-cache-dir "ray[all]" ipykernel jupyterlab notebook pandas scikit-learn
+RUN venv/bin/pip install "ray[all]" ipykernel jupyterlab notebook pandas scikit-learn torch
 
 # 7. Register the VENV as a Jupyter Kernel
 RUN /home/coder/venv/bin/python -m ipykernel install \
