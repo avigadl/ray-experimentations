@@ -1,9 +1,14 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ray
+---
 apiVersion: ray.io/v1
 kind: RayCluster
 metadata:
   name: raycluster-latest
   # Ensure this is in the correct namespace if different from 'default'
-  namespace: default
+  namespace: ray
 spec:
   # The Kubernetes Service discovery requires a unique name for the head service.
   # The full service name will be: raycluster-latest-head-svc
