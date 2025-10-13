@@ -1,7 +1,7 @@
 # Dockerfile.jupyter-notebook.amd64 - FINAL CORRECTED VERSION
 
 # Stage 1: Use a clean, multi-arch Python base image
-FROM python:3.11-slim as base
+FROM python:3.11-slim AS base
 
 USER root
 
