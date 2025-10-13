@@ -2,21 +2,41 @@ apiVersion: ray.io/v1
 kind: RayCluster
 metadata:
   name: raycluster-latest
+  # Ensure this is in the correct namespace if different from 'default'
+  namespace: default
 spec:
+  # The Kubernetes Service discovery requires a unique name for the head service.
+  # The full service name will be: raycluster-latest-head-svc
+  
+  # Set the desired Ray version to match the client
+  rayVersion: "2.50.0"
+  
   # ====== Head Pod Configuration ======
   headGroupSpec:
     rayStartParams:
       dashboard-host: "0.0.0.0"
+      # The head node will manage the GCS and Dashboard.
     template:
       spec:
+        # Define the container for the head node
         containers:
           - name: ray-head
-            # Updated to the latest version
-            image: "rayproject/ray-ml:2.50.0-py311"
+            # Use the lean CPU-based Ray image
+            image: "rayproject/ray:2.50.0-py311"
+            
+            # CRITICAL: Install PyTorch and then start the Ray Head process
+            command: ["/bin/bash", "-c"]
+            args: 
+              - pip install torch && 
+                ray start --head --dashboard-host=0.0.0.0 --port=6379 --object-manager-port=12345
+                
             ports:
-              - containerPort: 6379
-              - containerPort: 8265
-              - containerPort: 10001
+              - name: gcs
+                containerPort: 6379
+              - name: dashboard
+                containerPort: 8265
+              - name: client
+                containerPort: 10001
             resources:
               requests:
                 cpu: "1"
@@ -27,7 +47,8 @@ spec:
   
   # ====== Worker Pod Configurations ======
   workerGroupSpecs:
-    # --- Worker Group 1: GPU worker (automatic scheduling) ---
+    
+    # --- Worker Group 1: GPU worker ---
     - groupName: gpu-worker-group
       replicas: 1
       minReplicas: 1
@@ -35,14 +56,22 @@ spec:
       rayStartParams: {}
       template:
         spec:
+          # Ensure scheduling only on GPU nodes
           tolerations:
             - key: "nvidia.com/gpu"
               operator: "Exists"
               effect: "NoSchedule"
           containers:
             - name: ray-gpu-worker
-              # Updated to the latest GPU version
-              image: "rayproject/ray-ml:2.50.0-py311-gpu"
+              # Use the lean GPU-based Ray image
+              image: "rayproject/ray:2.50.0-py311-gpu"
+              
+              # CRITICAL: Install PyTorch and then join the cluster
+              command: ["/bin/bash", "-c"]
+              args: 
+                - pip install torch && 
+                  ray start --address=$RAY_REDIS_ADDRESS
+                  
               lifecycle:
                 preStop:
                   exec:
@@ -55,9 +84,9 @@ spec:
                 limits:
                   cpu: "4"
                   memory: "8Gi"
-                  nvidia.com/gpu: "1"
+                  nvidia.com/gpu: "1" # Request the physical GPU resource
 
-    # --- Worker Group 2: The CPU worker (automatic scheduling) ---
+    # --- Worker Group 2: The CPU worker ---
     - groupName: cpu-worker-group
       replicas: 1
       minReplicas: 1
@@ -67,8 +96,15 @@ spec:
         spec:
           containers:
             - name: ray-cpu-worker
-              # Updated to the latest version
-              image: "rayproject/ray-ml:2.50.0-py311"
+              # Use the lean CPU-based Ray image
+              image: "rayproject/ray:2.50.0-py311"
+              
+              # CRITICAL: Install PyTorch and then join the cluster
+              command: ["/bin/bash", "-c"]
+              args: 
+                - pip install torch && 
+                  ray start --address=$RAY_REDIS_ADDRESS
+                  
               lifecycle:
                 preStop:
                   exec:
