@@ -1,0 +1,3 @@
+pip:
+  - vllm
+  - numpy==1.26.4
