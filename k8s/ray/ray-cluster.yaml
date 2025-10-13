@@ -22,14 +22,7 @@ spec:
         containers:
           - name: ray-head
             # Use the lean CPU-based Ray image
-            image: "rayproject/ray:2.50.0-py311"
-            
-            # CRITICAL: Install PyTorch and then start the Ray Head process
-            command: ["/bin/bash", "-c"]
-            args: 
-              - pip install torch && 
-                ray start --head --dashboard-host=0.0.0.0 --port=6379 --object-manager-port=12345
-                
+            image: "rayproject/ray:2.50.0-py311"            
             ports:
               - name: gcs
                 containerPort: 6379
@@ -64,14 +57,7 @@ spec:
           containers:
             - name: ray-gpu-worker
               # Use the lean GPU-based Ray image
-              image: "rayproject/ray:2.50.0-py311-gpu"
-              
-              # CRITICAL: Install PyTorch and then join the cluster
-              command: ["/bin/bash", "-c"]
-              args: 
-                - pip install torch && 
-                  ray start --address=$RAY_REDIS_ADDRESS
-                  
+              image: "rayproject/ray:2.50.0-py311-gpu"                  
               lifecycle:
                 preStop:
                   exec:
@@ -98,13 +84,6 @@ spec:
             - name: ray-cpu-worker
               # Use the lean CPU-based Ray image
               image: "rayproject/ray:2.50.0-py311"
-              
-              # CRITICAL: Install PyTorch and then join the cluster
-              command: ["/bin/bash", "-c"]
-              args: 
-                - pip install torch && 
-                  ray start --address=$RAY_REDIS_ADDRESS
-                  
               lifecycle:
                 preStop:
                   exec:
