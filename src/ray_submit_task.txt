@@ -3,3 +3,5 @@ ray job submit --address http://raycluster-latest-head-svc.ray.svc.cluster.local
 
 #Serve
 ray job submit   --address http://raycluster-latest-head-svc.ray.svc.cluster.local:8265   --working-dir .   --runtime-env-json='{"pip": ["vllm", "numpy==1.26.4"]}'   -- python serve_qwen_gpu.py
+
+ray job submit --address http://localhost:8265 --working-dir ./ --runtime-env-json='{"pip": ["torch", "torchvision", "torchaudio", "filelock"]}'  -- python distributed_cnn_train.py
