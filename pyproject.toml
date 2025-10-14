@@ -1,0 +1,10 @@
+[project]
+name = "ray-experimentations"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11.11"
+dependencies = [
+    "ray[all]==2.50.0",
+    "torch>=2.8.0",
+]
