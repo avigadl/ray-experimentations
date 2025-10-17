@@ -15,7 +15,7 @@ spec:
     spec:
       # This section is added to deploy to the specific node
       nodeSelector:
-        jenkins-node: pi-05
+        jenkins-node: eq-01
       containers:
       - name: jenkins
         image: jenkins/jenkins:lts

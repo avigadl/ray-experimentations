@@ -18,4 +18,4 @@ spec:
         - key: kubernetes.io/hostname
           operator: In
           values:
-          - pi-05 # Constrains this PV to the 'pi-05' node
+          - eq-01 # Constrains this PV to the 'eq-01' node
