@@ -1,0 +1,174 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: spark
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spark
+  namespace: spark
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: spark-role
+  namespace: spark
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services", "configmaps"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["pods/log"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: spark-role-binding
+  namespace: spark
+subjects:
+- kind: ServiceAccount
+  name: spark
+  namespace: spark
+roleRef:
+  kind: Role
+  name: spark-role
+  apiGroup: rbac.authorization.k8s.io
+---
+# Spark Master Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spark-master
+  namespace: spark
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: spark-master
+  template:
+    metadata:
+      labels:
+        app: spark-master
+    spec:
+      # Schedule master on eq-01
+      nodeSelector:
+        kubernetes.io/hostname: eq-01
+      serviceAccountName: spark
+      containers:
+      - name: spark-master
+        image: apache/spark:3.5.0
+        command: ["/opt/spark/bin/spark-class"]
+        args: ["org.apache.spark.deploy.master.Master", "--host", "0.0.0.0", "--port", "7077", "--webui-port", "8080"]
+        ports:
+        - name: master-ui
+          containerPort: 8080
+        - name: master-port
+          containerPort: 7077
+        resources:
+          requests:
+            cpu: "1"
+            memory: "2Gi"
+          limits:
+            cpu: "2"
+            memory: "4Gi"
+---
+# Spark Master Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: spark-master-svc
+  namespace: spark
+spec:
+  type: NodePort
+  selector:
+    app: spark-master
+  ports:
+  - name: master-ui
+    port: 8080
+    targetPort: 8080
+    nodePort: 30080
+  - name: master-port
+    port: 7077
+    targetPort: 7077
+    nodePort: 30077
+---
+# Spark Worker Deployment - CPU Workers
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spark-worker-cpu
+  namespace: spark
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: spark-worker-cpu
+  template:
+    metadata:
+      labels:
+        app: spark-worker-cpu
+        spark-role: worker
+    spec:
+      serviceAccountName: spark
+      containers:
+      - name: spark-worker
+        image: apache/spark:3.5.0
+        command: ["/opt/spark/bin/spark-class"]
+        args: ["org.apache.spark.deploy.worker.Worker", "spark://spark-master-svc:7077", "--memory", "8g", "--cores", "4", "--webui-port", "8081"]
+        ports:
+        - name: worker-ui
+          containerPort: 8081
+        resources:
+          requests:
+            cpu: "2"
+            memory: "8Gi"
+          limits:
+            cpu: "4"
+            memory: "16Gi"
+---
+# Spark Worker Deployment - GPU Workers
+# Note: GPUs are currently allocated to Ray cluster
+# Increase replicas when GPUs are available or scale down Ray
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spark-worker-gpu
+  namespace: spark
+spec:
+  replicas: 0
+  selector:
+    matchLabels:
+      app: spark-worker-gpu
+  template:
+    metadata:
+      labels:
+        app: spark-worker-gpu
+        spark-role: worker
+    spec:
+      # Schedule on GPU nodes only
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+      tolerations:
+      - key: "nvidia.com/gpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+      serviceAccountName: spark
+      containers:
+      - name: spark-worker
+        image: apache/spark:3.5.0
+        command: ["/opt/spark/bin/spark-class"]
+        args: ["org.apache.spark.deploy.worker.Worker", "spark://spark-master-svc:7077", "--memory", "4g", "--cores", "4", "--webui-port", "8081"]
+        ports:
+        - name: worker-ui
+          containerPort: 8081
+        resources:
+          requests:
+            cpu: "2"
+            memory: "4Gi"
+            nvidia.com/gpu: "1"
+          limits:
+            cpu: "4"
+            memory: "8Gi"
+            nvidia.com/gpu: "1"
