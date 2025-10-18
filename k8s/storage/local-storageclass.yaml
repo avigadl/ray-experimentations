@@ -1,0 +1,6 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: local-storage
+provisioner: kubernetes.io/no-provisioner # Indicates a static provisioner
+volumeBindingMode: WaitForFirstConsumer # Schedules the Pod to a node with a matching PV

@@ -1,0 +1,111 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: register-qwen3-4b
+  namespace: mlflow
+spec:
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: model-register
+          image: python:3.11-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              echo "Installing dependencies..."
+              pip install -q mlflow transformers torch torchvision accelerate huggingface_hub
+
+              echo "Creating registration script..."
+              cat > /tmp/register.py << 'EOFPYTHON'
+              import logging
+import mlflow
+import mlflow.transformers
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Configuration
+MLFLOW_URI = "http://mlflow-server.mlflow.svc.cluster.local:5000"
+MODEL_NAME = "Qwen/Qwen3-4B-Instruct-2507"
+REGISTERED_NAME = "qwen3-4b"
+
+mlflow.set_tracking_uri(MLFLOW_URI)
+logger.info(f"Connected to MLflow at: {MLFLOW_URI}")
+
+# Create experiment
+experiment_name = "model-registration"
+try:
+    experiment = mlflow.get_experiment_by_name(experiment_name)
+    if experiment is None:
+        mlflow.create_experiment(experiment_name)
+except:
+    pass
+
+# Start run
+with mlflow.start_run(experiment_id="1", run_name=f"register-{REGISTERED_NAME}"):
+    logger.info(f"Downloading model: {MODEL_NAME}")
+
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
+    logger.info("✓ Tokenizer loaded")
+
+    model = AutoModelForCausalLM.from_pretrained(
+        MODEL_NAME,
+        torch_dtype="auto",
+        trust_remote_code=True,
+        device_map="cpu"
+    )
+    logger.info("✓ Model loaded")
+
+    # Log parameters
+    mlflow.log_param("source_model", MODEL_NAME)
+    mlflow.log_param("model_type", "causal-lm")
+
+    logger.info("Logging model to MLflow (this will take several minutes)...")
+
+    # Log model
+    model_info = mlflow.transformers.log_model(
+        transformers_model={"model": model, "tokenizer": tokenizer},
+        artifact_path="model",
+        task="text-generation",
+    )
+
+    logger.info(f"✓ Model logged: {model_info.model_uri}")
+
+    # Register
+    client = mlflow.MlflowClient()
+    try:
+        client.create_registered_model(
+            name=REGISTERED_NAME,
+            description="Qwen 3 4B instruction-tuned model"
+        )
+    except:
+        pass
+
+    version = client.create_model_version(
+        name=REGISTERED_NAME,
+        source=model_info.model_uri,
+        run_id=model_info.run_id
+    )
+
+    client.set_model_version_tag(REGISTERED_NAME, version.version, "source", "huggingface")
+    client.set_model_version_tag(REGISTERED_NAME, version.version, "source_model", MODEL_NAME)
+
+    logger.info(f"✅ SUCCESS! Model registered as '{REGISTERED_NAME}' version {version.version}")
+              EOFPYTHON
+
+              echo "Running registration..."
+              python /tmp/register.py
+
+              echo "Done!"
+          resources:
+            requests:
+              cpu: "2"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "32Gi"
