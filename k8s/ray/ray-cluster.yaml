@@ -23,6 +23,9 @@ spec:
       # The head node will manage the GCS and Dashboard.
     template:
       spec:
+        # Schedule head node on eq-01 for better performance
+        nodeSelector:
+          kubernetes.io/hostname: eq-01
         # Define the container for the head node
         containers:
           - name: ray-head
@@ -55,6 +58,8 @@ spec:
       template:
         spec:
           # Ensure scheduling only on GPU nodes
+          nodeSelector:
+            nvidia.com/gpu.present: "true"
           tolerations:
             - key: "nvidia.com/gpu"
               operator: "Exists"
