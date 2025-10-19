@@ -14,6 +14,7 @@ class QwenModelServer:
         self.llm = LLM(
             model="Qwen/Qwen3-4B-Instruct-2507",
             trust_remote_code=True,
+            max_model_len=8192,
             gpu_memory_utilization=0.9,
         )
         self.sampling_params = SamplingParams(temperature=0.7, max_tokens=100)
