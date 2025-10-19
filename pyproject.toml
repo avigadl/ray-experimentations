@@ -5,6 +5,9 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11.11"
 dependencies = [
+    "mlflow>=3.5.0",
     "ray[all]==2.50.0",
     "torch>=2.8.0",
+    "transformers>=4.57.1",
+    "vllm>=0.11.0",
 ]
