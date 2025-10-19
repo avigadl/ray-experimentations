@@ -18,5 +18,5 @@ ray staus --address "http://localhost:8265"
 
 curl -X POST \
   -H "Content-Type: application/json" \
-  -d '{"prompt": "What is the Qwen2 model?"}' \
+  -d '{"prompt": "Explin in short quantum mechanic principles."}' \
   http://localhost:8000/QwenModelServer
