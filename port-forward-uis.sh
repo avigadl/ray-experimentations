@@ -30,6 +30,10 @@ kubectl port-forward -n mlflow svc/mlflow-server 5000:5000 &
 echo "Jenkins UI: http://localhost:8080"
 kubectl port-forward -n jenkins svc/jenkins-service 8080:8080 &
 
+# Ray Serve
+echo "Ray Serve: http://localhost:8000"
+kubectl port-forward service/raycluster-latest-head-svc 8000:8000 -n ray
+
 echo ""
 echo "========================================"
 echo "Port-forwards started!"
