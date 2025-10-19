@@ -2,18 +2,17 @@
 
 import os
 from starlette.requests import Request
-from vllm import LLM, SamplingParams
 from ray import serve
-import ray
 
 @serve.deployment(
     num_replicas=1,
-    ray_actor_options={"num_gpus": 1},
+    ray_actor_options={"num_gpus": 1.0},
 )
 class QwenModelServer:
     def __init__(self):
+        from vllm import LLM, SamplingParams
         self.llm = LLM(
-            model="Qwen/Qwen2-0.5B-Instruct",
+            model="Qwen/Qwen3-4B-Instruct-2507",
             trust_remote_code=True,
             gpu_memory_utilization=0.9,
         )
@@ -29,11 +28,7 @@ class QwenModelServer:
 
         # NOTE: results.outputs is a list of CompletionOutput objects
         # For this simple case, we take the first output.
-        generated_text = results.outputs[0].text
+        generated_text = results[0].outputs[0].text 
         return {"result": generated_text}
 
-# IMPORTANT: This is the part that enables deployment via job submission.
-if __name__ == "__main__":
-    ray.init(address="auto") # Connect to the cluster
-    qwen_app = QwenModelServer.bind()
-    serve.run(qwen_app)
+app = QwenModelServer.bind()
