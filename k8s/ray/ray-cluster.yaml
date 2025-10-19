@@ -38,6 +38,8 @@ spec:
                 containerPort: 8265
               - name: client
                 containerPort: 10001
+              - name: serve # Name it 'serve' or 'http'
+                containerPort: 8000
             resources:
               requests:
                 cpu: "1"
