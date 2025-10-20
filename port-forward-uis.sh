@@ -20,7 +20,7 @@ fi
 
 # Ray Dashboard
 echo "Ray Dashboard: http://localhost:8265"
-kubectl port-forward -n ray svc/raycluster-latest-head-svc 8265:8265 &
+kubectl port-forward -n  ray svc/raycluster-latest-head-svc 8265:8265 &
 
 # MLflow UI
 echo "MLflow UI: http://localhost:5000"
@@ -30,9 +30,20 @@ kubectl port-forward -n mlflow svc/mlflow-server 5000:5000 &
 echo "Jenkins UI: http://localhost:8080"
 kubectl port-forward -n jenkins svc/jenkins-service 8080:8080 &
 
+# Grafana
+echo "Grafana Serve: http://localhost:3000"
+kubectl port-forward svc/prometheus-grafana -n prometheus-system 3000:80 &
+
+# Prometheus Serve
+echo "Prometheus Serve: http://localhost:9090"
+kubectl port-forward svc/prometheus-operated -n prometheus-system 9090:9090 &
+
+
 # Ray Serve
 echo "Ray Serve: http://localhost:8000"
-kubectl port-forward service/raycluster-latest-head-svc 8000:8000 -n ray
+kubectl port-forward service/raycluster-latest-head-svc  -n ray 8000:8000 &
+
+
 
 echo ""
 echo "========================================"
