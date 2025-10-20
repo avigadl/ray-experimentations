@@ -41,7 +41,7 @@ class QwenModelServer:
         self.llm = LLM(
             model="Qwen/Qwen3-4B-Instruct-2507",
             trust_remote_code=True,
-            max_model_len=1024,
+            max_model_len=4096,
             gpu_memory_utilization=0.90,
         )
         self.sampling_params = SamplingParams(temperature=0.7, top_p=0.95, max_tokens=512)
@@ -70,7 +70,7 @@ class Phi4ModelServer:
         self.llm = LLM(
             model="microsoft/Phi-4-mini-instruct",
             trust_remote_code=True,
-            max_model_len=1024,
+            max_model_len=4096,
             gpu_memory_utilization=0.90,
         )
         self.sampling_params = SamplingParams(temperature=0.7, top_p=0.95, max_tokens=512)
