@@ -1,0 +1,18 @@
+# ray-podmonitor.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: ray-pods
+  namespace: monitoring
+  labels:
+    release: monitoring   # must match your kube-prometheus-stack release
+spec:
+  namespaceSelector:
+    matchNames: [ray-cluster]
+  selector:
+    matchLabels:
+      ray.io/is-ray-node: "yes"   # all Ray pods KubeRay creates have this
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s

@@ -1,0 +1,36 @@
+# kuberay-operator-servicemonitor.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: kuberay-operator-metrics
+  namespace: ray-system
+  labels:
+    app.kubernetes.io/part-of: kuberay
+    app.kubernetes.io/name: kuberay-operator
+spec:
+  selector:
+    app.kubernetes.io/name: kuberay
+    app.kubernetes.io/component: operator
+  ports:
+    - name: metrics
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kuberay-operator
+  namespace: monitoring
+  labels:
+    release: monitoring   # IMPORTANT: must match your kube-prometheus-stack release name
+spec:
+  namespaceSelector:
+    matchNames: [ray-system]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kuberay-operator
+      app.kubernetes.io/part-of: kuberay
+  endpoints:
+    - port: metrics
+      interval: 30s
+      path: /metrics
