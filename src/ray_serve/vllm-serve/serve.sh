@@ -7,14 +7,11 @@ ray job submit --address "http://localhost:8265" \
 curl "http://eq-01:8000/?text="hello world"
 
 
-
 ray job stop raysubmit_fJADtGU24H1NhpAa --address "http://localhost:8265" 
 
 serve shutdown --address "http://localhost:8265" 
 
 ray staus --address "http://localhost:8265" 
-
-
 
 curl -X POST \
   -H "Content-Type: application/json" \

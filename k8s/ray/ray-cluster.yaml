@@ -47,6 +47,13 @@ spec:
               limits:
                 cpu: "2"
                 memory: "4Gi"
+            env:
+              - name: RAY_GRAFANA_IFRAME_HOST
+                value: http://127.0.0.1:3000
+              - name: RAY_GRAFANA_HOST
+                value: http://monitoring-grafana.monitoring.svc:80
+              - name: RAY_PROMETHEUS_HOST
+                value: http://monitoring-kube-prometheus-prometheus.monitoring.svc:9090
   
   # ====== Worker Pod Configurations ======
   workerGroupSpecs:

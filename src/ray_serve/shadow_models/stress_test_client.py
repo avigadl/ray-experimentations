@@ -6,7 +6,7 @@ from tqdm.asyncio import tqdm_asyncio # For async progress bar
 
 # --- Configuration ---
 DATASET_NAME = "imdb"
-DATASET_SPLIT = "test" # Use 'test' or 'train[:1000]' for a smaller sample
+DATASET_SPLIT = "train" # Use 'test' or 'train[:1000]' for a smaller sample
 BATCH_SIZE = 8        # Number of prompts per concurrent request batch
 MAX_CONCURRENT_REQUESTS = 4 # How many batches to send at once
 RAY_SERVE_ENDPOINT = "http://localhost:8000/sentiment" # Your Ray Serve endpoint
@@ -36,7 +36,7 @@ async def process_batch(session, batch_raw_texts):
     tasks = []
     for raw_text in batch_raw_texts:
         # --- Add the instruction here ---
-        sentiment_prompt = f"Classify the sentiment of the following movie review as 'positive'/'negative'/'neutral'.\n\nReview:\n{raw_text}\n\nSentiment:"
+        sentiment_prompt = f"Classify the sentiment of the following movie review returning only one of 'positive'/'negative'/'neutral'.\n\nReview:\n{raw_text}\n\nSentiment:"
         # ---------------------------------
         tasks.append(send_sentiment_request(session, sentiment_prompt))
 
@@ -49,7 +49,7 @@ async def main():
         # Load dataset (adjust split for testing, e.g., 'test[:100]')
         dataset = load_dataset(DATASET_NAME, split=DATASET_SPLIT)
         df = dataset.to_pandas()
-        df = df[:500]
+        df = df[:]
         print(f"Loaded {len(df)} samples.")
     except Exception as e:
         print(f"Error loading dataset: {e}")

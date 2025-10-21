@@ -20,7 +20,7 @@ apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: kuberay-operator
-  namespace: monitoring
+  namespace: ray-system
   labels:
     release: monitoring   # IMPORTANT: must match your kube-prometheus-stack release name
 spec:
