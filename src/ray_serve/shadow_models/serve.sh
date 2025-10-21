@@ -19,3 +19,8 @@ ray staus --address "http://localhost:8265"
 curl -X POST "http://localhost:8000/sentiment" \
      -H "Content-Type: text/plain" \
      -d "Classify the sentiment of the text as just one word positive/negative/natural: 'This new Ray Serve feature is incredible!'"
+
+
+
+#open a shel in the clsuter
+kubectl run mycurlpod --image=curlimages/curl -i --tty --rm -- sh
