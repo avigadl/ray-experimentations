@@ -24,3 +24,6 @@ curl -X POST "http://localhost:8000/sentiment" \
 
 #open a shel in the clsuter
 kubectl run mycurlpod --image=curlimages/curl -i --tty --rm -- sh
+
+
+http://prometheus-operated.monitoring.svc:9090

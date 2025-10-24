@@ -6,87 +6,89 @@ from tqdm.asyncio import tqdm_asyncio # For async progress bar
 
 # --- Configuration ---
 DATASET_NAME = "imdb"
-DATASET_SPLIT = "train" # Use 'test' or 'train[:1000]' for a smaller sample
+DATASET_SPLIT = "train[:]" # Use 'test' or 'train[:1000]' for a smaller sample
 BATCH_SIZE = 8        # Number of prompts per concurrent request batch
 MAX_CONCURRENT_REQUESTS = 4 # How many batches to send at once
-RAY_SERVE_ENDPOINT = "http://localhost:8000/sentiment" # Your Ray Serve endpoint
+RAY_SERVE_BASE_URL = "http://localhost:8000" # Your Ray Serve base URL
 OUTPUT_CSV_FILE = "sentiment_results.csv"
 TEXT_COLUMN = "text" # Column in the dataset containing the text to analyze
 # --- ------------- ---
 
-async def send_sentiment_request(session, text_prompt):
-    """Sends a single prompt to the Ray Serve endpoint."""
+async def send_sentiment_request(session, text_prompt, model_name):
+    """Sends a single prompt to a specific model's endpoint."""
+    endpoint_url = f"{RAY_SERVE_BASE_URL}/models/{model_name}/generate"
+    
     try:
-        async with session.post(RAY_SERVE_ENDPOINT, data=text_prompt.encode('utf-8'), headers={'Content-Type': 'text/plain'}) as response:
+        async with session.post(endpoint_url, data=text_prompt.encode('utf-8'), headers={'Content-Type': 'text/plain'}) as response:
             if response.status == 200:
                 result = await response.json()
-                return result.get("qwen_output", "Error"), result.get("phi4_output", "Error")
+                return result.get("text", "Error: 'text' key missing")
             else:
                 error_text = await response.text()
-                print(f"Request failed with status {response.status}: {error_text}")
-                return f"HTTP Error {response.status}", f"HTTP Error {response.status}"
+                print(f"[{model_name}] Request failed with status {response.status}: {error_text}")
+                return f"HTTP Error {response.status}"
     except aiohttp.ClientError as e:
-        print(f"Request connection error: {e}")
-        return f"Connection Error: {e}", f"Connection Error: {e}"
+        print(f"[{model_name}] Request connection error: {e}")
+        return f"Connection Error: {e}"
     except Exception as e:
-        print(f"An unexpected error occurred: {e}")
-        return f"Unexpected Error: {e}", f"Unexpected Error: {e}"
+        print(f"[{model_name}] An unexpected error occurred: {e}")
+        return f"Unexpected Error: {e}"
 
 async def process_batch(session, batch_raw_texts):
     tasks = []
     for raw_text in batch_raw_texts:
-        # --- Add the instruction here ---
         sentiment_prompt = f"Classify the sentiment of the following movie review returning only one of 'positive'/'negative'/'neutral'.\n\nReview:\n{raw_text}\n\nSentiment:"
-        # ---------------------------------
-        tasks.append(send_sentiment_request(session, sentiment_prompt))
+        
+        # --- REMOVED: Qwen task is no longer created ---
+        # tasks.append(send_sentiment_request(session, sentiment_prompt, "qwen"))
+        tasks.append(send_sentiment_request(session, sentiment_prompt, "phi4"))
 
+    # This will now return a flat list like [phi4_res_1, phi4_res_2, ...]
     results = await tqdm_asyncio.gather(*tasks, desc="Processing batch", leave=False)
     return results
 
 async def main():
     print(f"Loading dataset '{DATASET_NAME}' split '{DATASET_SPLIT}'...")
     try:
-        # Load dataset (adjust split for testing, e.g., 'test[:100]')
         dataset = load_dataset(DATASET_NAME, split=DATASET_SPLIT)
         df = dataset.to_pandas()
-        df = df[:]
         print(f"Loaded {len(df)} samples.")
     except Exception as e:
         print(f"Error loading dataset: {e}")
         return
 
-    # Add new columns for results
-    df['qwen_sentiment'] = None
+    # --- REMOVED: qwen_sentiment column ---
+    # df['qwen_sentiment'] = None
     df['phi4_sentiment'] = None
 
-    # Use a semaphore to limit concurrency
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
-    connector = aiohttp.TCPConnector(limit_per_host=MAX_CONCURRENT_REQUESTS) # Adjust connector limit too
+    # --- MODIFIED: Simplified connector limit ---
+    connector = aiohttp.TCPConnector(limit_per_host=MAX_CONCURRENT_REQUESTS)
     async with aiohttp.ClientSession(connector=connector) as session:
         tasks = []
-        # Create batches of indices
         for i in range(0, len(df), BATCH_SIZE):
             batch_indices = df.index[i:i + BATCH_SIZE]
             batch_prompts = df.loc[batch_indices, TEXT_COLUMN].tolist()
 
-            # Define the task for processing one batch, guarded by the semaphore
             async def run_batch_task(indices, prompts):
                 async with semaphore:
+                    # --- MODIFIED: batch_results is now a flat list [phi4_res1, phi4_res2, ...]
                     batch_results = await process_batch(session, prompts)
-                    # Store results back in the DataFrame (important: use loc)
-                    for idx, (qwen_res, phi4_res) in zip(indices, batch_results):
-                        df.loc[idx, 'qwen_sentiment'] = qwen_res
+                    
+                    # --- MODIFIED: Simplified result unpacking ---
+                    for idx, phi4_res in zip(indices, batch_results):
+                        # df.loc[idx, 'qwen_sentiment'] = qwen_res # --- REMOVED ---
                         df.loc[idx, 'phi4_sentiment'] = phi4_res
             
             tasks.append(run_batch_task(batch_indices, batch_prompts))
 
-        # Run all batch tasks concurrently, with overall progress
         print(f"Starting sentiment analysis with {MAX_CONCURRENT_REQUESTS} concurrent batches of size {BATCH_SIZE}...")
         await tqdm_asyncio.gather(*tasks, desc="Overall Progress")
 
     print("\nSentiment analysis complete.")
     print("Sample results:")
-    print(df[[TEXT_COLUMN, 'qwen_sentiment', 'phi4_sentiment']].head())
+    # --- MODIFIED: Removed qwen_sentiment from output ---
+    print(df[[TEXT_COLUMN, 'phi4_sentiment']].head())
 
     print(f"\nSaving results to {OUTPUT_CSV_FILE}...")
     try:
@@ -96,7 +98,6 @@ async def main():
         print(f"Error saving CSV: {e}")
 
 if __name__ == "__main__":
-    # uvloop can often speed up asyncio
     try:
         import uvloop
         uvloop.install()
