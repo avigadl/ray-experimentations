@@ -7,9 +7,13 @@ requires-python = ">=3.11.11"
 dependencies = [
     "aiohttp>=3.13.0",
     "datasets>=4.2.0",
+    "jupyter>=1.1.1",
     "mlflow>=3.5.0",
     "pandas>=2.3.3",
     "ray[all]==2.50.0",
+    "seaborn>=0.13.2",
+    "simpy>=4.1.1",
+    "simpy-helpers>=1.2.0",
     "torch>=2.8.0",
     "tqdm>=4.67.1",
     "transformers>=4.57.1",
