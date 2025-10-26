@@ -633,8 +633,9 @@ config = SimulationConfig(
 targets = TargetKPIs(sla_target=p_sla_target, abandon_target=p_abandon_target, utilization_target=75.0)
 
 # --- Load Call Rates & Baseline Staffing Plan ---
-call_rates_dict = DEFAULT_HOURLY_CALL_RATES
-baseline_staffing_dict = DEFAULT_HOURLY_STAFFING 
+call_rates_dict = None
+baseline_staffing_dict = None
+has_uploaded_file = False
 
 if uploaded_file is not None:
     try:
@@ -642,13 +643,23 @@ if uploaded_file is not None:
         if 'hour' in df_upload.columns and 'calls' in df_upload.columns and 'current_agents' in df_upload.columns:
             call_rates_dict = df_upload.set_index('hour')['calls'].to_dict()
             baseline_staffing_dict = df_upload.set_index('hour')['current_agents'].to_dict()
-            st.sidebar.success(f"Loaded {len(call_rates_dict)} hourly rates and staff levels.")
+            has_uploaded_file = True
+            st.sidebar.success(f"✅ Loaded {len(call_rates_dict)} hourly rates and staff levels.")
+            # Store the uploaded dataframe for display
+            st.session_state['uploaded_df'] = df_upload
         else:
-            st.sidebar.error("CSV must have 'hour', 'calls', and 'current_agents' columns.")
-            uploaded_file = None 
+            st.sidebar.error("❌ CSV must have 'hour', 'calls', and 'current_agents' columns.")
+            uploaded_file = None
+            has_uploaded_file = False
     except Exception as e:
-        st.sidebar.error(f"Error loading file: {e}")
-        uploaded_file = None 
+        st.sidebar.error(f"❌ Error loading file: {e}")
+        uploaded_file = None
+        has_uploaded_file = False
+else:
+    # Clear uploaded df if no file is present
+    if 'uploaded_df' in st.session_state:
+        del st.session_state['uploaded_df']
+    has_uploaded_file = False 
 
 # --- Initialize Session State ---
 if 'simulation_stage' not in st.session_state:
@@ -657,20 +668,28 @@ if 'simulation_stage' not in st.session_state:
     st.session_state.summary = None
     st.session_state.run_optimizations_clicked = False 
 
-# --- Auto-run Baseline Evaluation ---
-input_hash = hash((config, targets, tuple(sorted(call_rates_dict.items())), tuple(sorted(baseline_staffing_dict.items()))))
-if st.session_state.simulation_stage == 'initial' or st.session_state.get('last_input_hash') != input_hash:
-    st.session_state.results_df, st.session_state.summary = evaluate_baseline(config, targets, call_rates_dict, baseline_staffing_dict)
-    st.session_state.simulation_stage = 'baseline_evaluated'
-    st.session_state.last_input_hash = input_hash
-    st.session_state.run_optimizations_clicked = False 
+# --- Auto-run Baseline Evaluation (only if file uploaded) ---
+if has_uploaded_file and call_rates_dict is not None and baseline_staffing_dict is not None:
+    input_hash = hash((config, targets, tuple(sorted(call_rates_dict.items())), tuple(sorted(baseline_staffing_dict.items()))))
+    if st.session_state.simulation_stage == 'initial' or st.session_state.get('last_input_hash') != input_hash:
+        st.session_state.results_df, st.session_state.summary = evaluate_baseline(config, targets, call_rates_dict, baseline_staffing_dict)
+        st.session_state.simulation_stage = 'baseline_evaluated'
+        st.session_state.last_input_hash = input_hash
+        st.session_state.run_optimizations_clicked = False
+else:
+    # No file uploaded - reset to initial state
+    if st.session_state.simulation_stage != 'initial':
+        st.session_state.simulation_stage = 'initial'
+        st.session_state.results_df = None
+        st.session_state.summary = None
+        st.session_state.run_optimizations_clicked = False 
     
 # --- Optimization Button Logic ---
-run_optimizations_button = st.button("Run Full Optimization", type="primary")
+run_optimizations_button = st.button("Run Full Optimization", type="primary", disabled=(not has_uploaded_file or st.session_state.simulation_stage == 'initial'))
 if run_optimizations_button:
     st.session_state.run_optimizations_clicked = True 
 
-if st.session_state.run_optimizations_clicked and st.session_state.simulation_stage != 'optimizations_run':
+if st.session_state.run_optimizations_clicked and st.session_state.simulation_stage != 'optimizations_run' and has_uploaded_file:
     optimal_baseline_df, optimal_agentforce_df = run_optimizations(config, targets, call_rates_dict, p_run_agentforce_opt)
     
     combined_df = st.session_state.results_df.copy()
@@ -716,6 +735,56 @@ if st.session_state.run_optimizations_clicked and st.session_state.simulation_st
     st.session_state.simulation_stage = 'optimizations_run'
 
 # --- Display Area (adapts based on session state) ---
+
+# Show empty state if no file uploaded
+if not has_uploaded_file:
+    st.info("👋 Welcome! Please upload a CSV file to get started.")
+    st.markdown("### How to Get Started")
+    st.markdown("""
+    1. **Prepare your CSV file** with three columns:
+       - `hour` (0-23): Hour of the day
+       - `calls`: Number of calls expected in that hour
+       - `current_agents`: Number of agents currently staffed for that hour
+    
+    2. **Upload the file** using the sidebar on the left
+    
+    3. The app will automatically evaluate your baseline plan
+    
+    4. Click **'Run Full Optimization'** to find optimal staffing levels
+    """)
+    
+    st.markdown("### Example CSV Format")
+    example_data = pd.DataFrame({
+        'hour': [0, 1, 2, 3, 4],
+        'calls': [30, 20, 10, 10, 15],
+        'current_agents': [8, 6, 5, 5, 6]
+    })
+    st.dataframe(example_data, use_container_width=True)
+    st.markdown("_Your CSV should have 24 rows (one for each hour of the day)_")
+
+# Show uploaded data preview if CSV was loaded
+elif 'uploaded_df' in st.session_state and st.session_state.get('uploaded_df') is not None:
+    st.success("✅ Custom baseline plan loaded successfully!")
+    with st.expander("📊 View Uploaded Baseline Data", expanded=True):
+        uploaded_df = st.session_state['uploaded_df']
+        st.markdown("**Loaded Data from CSV:**")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Hours", len(uploaded_df))
+        with col2:
+            st.metric("Total Calls", f"{uploaded_df['calls'].sum():,.0f}")
+        with col3:
+            st.metric("Total Agent Hours", f"{uploaded_df['current_agents'].sum():.0f}")
+        
+        st.dataframe(
+            uploaded_df.style.format({
+                'calls': '{:,.0f}',
+                'current_agents': '{:.0f}'
+            }),
+            use_container_width=True
+        )
+    st.markdown("---")
+
 # Ensure results_df and summary are loaded before trying to display
 if st.session_state.results_df is not None and st.session_state.summary is not None:
     display_df = st.session_state.results_df
@@ -746,14 +815,45 @@ if st.session_state.results_df is not None and st.session_state.summary is not N
                             delta=f"{deflection_pp_l1:.1f} p.p.", delta_color="normal",
                             help="Weighted avg. % of calls deflected in Optimal Baseline vs Baseline Plan.")
     else: # Only baseline evaluated
-        cols = st.columns(1)
+        st.info("📊 Baseline plan has been evaluated. Click **'Run Full Optimization'** to find optimal staffing levels.")
+        cols = st.columns(3)
         cols[0].metric("Baseline Plan Hours", f"{display_summary.get('baseline_total', 0):.0f}")
+        cols[1].metric("Peak Staffing", f"{display_summary.get('peak_baseline', 0):.0f} agents")
+        cols[2].metric("Avg Service Level", f"{display_summary.get('avg_sla_baseline', 0):.1f}%")
 
     st.header("Hourly Staffing Plan Comparison")
 
     # Define Box Styles
     green_box_style = "background-color: #D4EDDA; color: #155724; border: 1px solid #C3E6CB; border-radius: 4px; padding: 2px 6px; font-weight: bold; font-size: 0.9em; margin-left: 10px;"
     red_box_style = "background-color: #F8D7DA; color: #721C24; border: 1px solid #F5C6CB; border-radius: 4px; padding: 2px 6px; font-weight: bold; font-size: 0.9em; margin-left: 10px;"
+
+    # Show baseline performance summary when only baseline evaluated
+    if not optimizations_run and stage == 'baseline_evaluated':
+        st.subheader("Baseline Plan Performance")
+        perf_cols = st.columns(2)
+        with perf_cols[0]:
+            sla_baseline = display_summary.get('avg_sla_baseline', 0)
+            sla_status = "✅ Meeting Target" if sla_baseline >= targets.sla_target else "⚠️ Below Target"
+            sla_color = "#D4EDDA" if sla_baseline >= targets.sla_target else "#FFF3CD"
+            st.markdown(f"""
+            <div style="background-color: {sla_color}; border: 1px solid #E0E5EB; border-radius: 5px; padding: 20px;">
+                <h5 style="color: #0070D2; margin-top: 0;">Service Level (SLA)</h5>
+                <p style="font-size: 1.8em; font-weight: bold; margin: 10px 0;">{sla_baseline:.1f}%</p>
+                <p style="font-size: 1em;">{sla_status} (Target: {targets.sla_target:.0f}%)</p>
+            </div>
+            """, unsafe_allow_html=True)
+        with perf_cols[1]:
+            abandon_baseline = display_summary.get('avg_abandon_baseline', 0)
+            abandon_status = "✅ Meeting Target" if abandon_baseline <= targets.abandon_target else "⚠️ Above Target"
+            abandon_color = "#D4EDDA" if abandon_baseline <= targets.abandon_target else "#FFF3CD"
+            st.markdown(f"""
+            <div style="background-color: {abandon_color}; border: 1px solid #E0E5EB; border-radius: 5px; padding: 20px;">
+                <h5 style="color: #0070D2; margin-top: 0;">Abandon Rate</h5>
+                <p style="font-size: 1.8em; font-weight: bold; margin: 10px 0;">{abandon_baseline:.1f}%</p>
+                <p style="font-size: 1em;">{abandon_status} (Target: ≤{targets.abandon_target:.0f}%)</p>
+            </div>
+            """, unsafe_allow_html=True)
+        st.markdown("<br>", unsafe_allow_html=True)
 
     # Show savings cards only after optimizations run
     if optimizations_run:
@@ -875,12 +975,50 @@ if st.session_state.results_df is not None and st.session_state.summary is not N
         kpi_ci_area = alt.Chart(kpi_data).mark_area(opacity=0.3).encode(x=alt.X('hour:O'), y=alt.Y('CI_Lower:Q'), y2=alt.Y2('CI_Upper:Q'), color=alt.Color('Plan:N', legend=None))
 
         # --- Chart 1: SLA ---
-        sla_target_line = alt.Chart().mark_rule(color='green', strokeDash=[5,5], size=2).encode(y=alt.Y(datum=targets.sla_target), tooltip=alt.value(f'SLA Target: {targets.sla_target}%')).properties(title="SLA Target")
-        sla_chart = alt.layer(kpi_ci_area.transform_filter(alt.datum.KPI == 'SLA'), kpi_base_chart.transform_filter(alt.datum.KPI == 'SLA'), sla_target_line).properties(title='Service Level Agreement (SLA) with 95% Confidence Interval').resolve_scale(y='shared').encode(x=alt.X('hour:O', title=None, axis=None), y=alt.Y('Percentage:Q', title='SLA (%)', scale=alt.Scale(padding=0.2)))
+        sla_target_line = alt.Chart().mark_rule(color='#28A745', strokeWidth=3, strokeDash=[8,4]).encode(
+            y=alt.Y(datum=targets.sla_target)
+        )
+        sla_target_text = alt.Chart().mark_text(
+            align='right', dx=-5, dy=-5, color='#28A745', fontWeight='bold', fontSize=12
+        ).encode(
+            x=alt.value(0),
+            y=alt.Y(datum=targets.sla_target),
+            text=alt.value(f'Target: {targets.sla_target:.0f}%')
+        )
+        sla_chart = alt.layer(
+            kpi_ci_area.transform_filter(alt.datum.KPI == 'SLA'), 
+            kpi_base_chart.transform_filter(alt.datum.KPI == 'SLA'), 
+            sla_target_line,
+            sla_target_text
+        ).properties(
+            title='Service Level Agreement (SLA) with 95% Confidence Interval'
+        ).resolve_scale(y='shared').encode(
+            x=alt.X('hour:O', title=None, axis=None), 
+            y=alt.Y('Percentage:Q', title='SLA (%)', scale=alt.Scale(padding=0.2))
+        )
 
         # --- Chart 2: Abandon Rate ---
-        abandon_target_line = alt.Chart().mark_rule(color='red', strokeDash=[5,5], size=2).encode(y=alt.Y(datum=targets.abandon_target), tooltip=alt.value(f'Abandon Target: {targets.abandon_target}%')).properties(title="Abandon Target")
-        abandon_chart = alt.layer(kpi_ci_area.transform_filter(alt.datum.KPI == 'Abandon'), kpi_base_chart.transform_filter(alt.datum.KPI == 'Abandon'), abandon_target_line).properties(title='Abandon Rate with 95% Confidence Interval').resolve_scale(y='shared').encode(x=alt.X('hour:O', title=None, axis=None), y=alt.Y('Percentage:Q', title='Abandon Rate (%)', scale=alt.Scale(padding=0.2)))
+        abandon_target_line = alt.Chart().mark_rule(color='#DC3545', strokeWidth=3, strokeDash=[8,4]).encode(
+            y=alt.Y(datum=targets.abandon_target)
+        )
+        abandon_target_text = alt.Chart().mark_text(
+            align='right', dx=-5, dy=-5, color='#DC3545', fontWeight='bold', fontSize=12
+        ).encode(
+            x=alt.value(0),
+            y=alt.Y(datum=targets.abandon_target),
+            text=alt.value(f'Target: {targets.abandon_target:.1f}%')
+        )
+        abandon_chart = alt.layer(
+            kpi_ci_area.transform_filter(alt.datum.KPI == 'Abandon'), 
+            kpi_base_chart.transform_filter(alt.datum.KPI == 'Abandon'), 
+            abandon_target_line,
+            abandon_target_text
+        ).properties(
+            title='Abandon Rate with 95% Confidence Interval'
+        ).resolve_scale(y='shared').encode(
+            x=alt.X('hour:O', title=None, axis=None), 
+            y=alt.Y('Percentage:Q', title='Abandon Rate (%)', scale=alt.Scale(padding=0.2))
+        )
         
         show_deflection = agentforce_run or (optimizations_run and 'avg_deflected_rate_optimal_baseline' in display_summary and display_summary.get('avg_deflected_rate_optimal_baseline', 0.0) > 0.01) or ('avg_deflected_rate_baseline' in display_summary and display_summary.get('avg_deflected_rate_baseline', 0.0) > 0.01)
         
@@ -907,7 +1045,11 @@ if st.session_state.results_df is not None and st.session_state.summary is not N
              st.dataframe(display_df[existing_cols].style.format(format_dict, na_rep="-"))
 
 
-elif stage == 'initial':
-     st.info("Evaluating baseline plan...")
+elif st.session_state.simulation_stage == 'initial':
+     # This shouldn't happen if logic above works correctly, but just in case
+     if not has_uploaded_file:
+         st.info("Please upload a CSV file to begin.")
+     else:
+         st.info("Evaluating baseline plan...")
 else:
      st.error("An unexpected error occurred. Please refresh the page.")

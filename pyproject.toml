@@ -22,4 +22,5 @@ dependencies = [
     "tqdm>=4.67.1",
     "transformers>=4.57.1",
     "vllm>=0.11.0",
+    "watchdog>=6.0.0",
 ]
