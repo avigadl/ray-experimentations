@@ -38,7 +38,7 @@ class SimulationConfig:
     # Optimization parameters
     num_replications_per_hour: int = 10
     sim_duration_per_hour: int = 3600
-    agent_cap: int = 18
+    agent_cap: int = 21
     min_agents: int = 1
     max_agents: int = 30
     
@@ -530,7 +530,19 @@ def run_optimization(config: SimulationConfig, targets: TargetKPIs,
         combined = baseline_plan.join(agentforce_plan[agentforce_cols_to_join])
         
         
-        # --- NEW: Calculate Weighted Average KPIs ---
+        # --- Calculate Peak Staff Savings ---
+        peak_baseline = combined['constrained_baseline'].max()
+        peak_agentforce = combined['constrained_agentforce'].max()
+        peak_savings = peak_baseline - peak_agentforce
+
+        # --- Calculate Staffing Savings (Agent-Hours) ---
+        baseline_total = combined['constrained_baseline'].sum()
+        agentforce_total = combined['constrained_agentforce'].sum()
+        savings = baseline_total - agentforce_total
+        savings_pct = (savings / baseline_total) * 100 if baseline_total > 0 else 0
+        
+        
+        # --- Calculate Weighted Average KPIs ---
         total_calls = combined['call_rate'].sum()
         
         if total_calls > 0:
@@ -541,23 +553,26 @@ def run_optimization(config: SimulationConfig, targets: TargetKPIs,
         else:
             avg_sla_baseline, avg_abandon_baseline, avg_sla_agentforce, avg_abandon_agentforce = (np.nan, np.nan, np.nan, np.nan)
         
+        # --- NEW: Calculate Percentage Point (p.p.) diff ---
+        sla_improvement_pp = avg_sla_agentforce - avg_sla_baseline
+        abandon_reduction_pp = avg_abandon_baseline - avg_abandon_agentforce # Positive is good
         
-        # --- Calculate Staffing Savings ---
-        baseline_total = combined['constrained_baseline'].sum()
-        agentforce_total = combined['constrained_agentforce'].sum()
-        savings = baseline_total - agentforce_total
-        savings_pct = (savings / baseline_total) * 100 if baseline_total > 0 else 0
         
         summary = {
             "baseline_total": baseline_total,
             "agentforce_total": agentforce_total,
             "savings": savings,
             "savings_pct": savings_pct,
-            # NEW: Add KPI averages to summary
+            "peak_baseline": peak_baseline,
+            "peak_agentforce": peak_agentforce,
+            "peak_savings": peak_savings,
             "avg_sla_baseline": avg_sla_baseline,
             "avg_sla_agentforce": avg_sla_agentforce,
             "avg_abandon_baseline": avg_abandon_baseline,
-            "avg_abandon_agentforce": avg_abandon_agentforce
+            "avg_abandon_agentforce": avg_abandon_agentforce,
+            # NEW: Add p.p. values to summary
+            "sla_improvement_pp": sla_improvement_pp,
+            "abandon_reduction_pp": abandon_reduction_pp
         }
     
     return combined, summary
@@ -599,7 +614,7 @@ with st.sidebar.expander("Agentforce Config", expanded=True):
 with st.sidebar.expander("Simulation Engine", expanded=True):
     p_reps = st.number_input("Replications per Hour", 10, 5000, 10, 10,
                              help="Number of simulations to run for each hour to find stable results. Higher is slower but more accurate.")
-    p_agent_cap = st.number_input("Agent Cap (per hour)", 10, 50, 18, 1,
+    p_agent_cap = st.number_input("Agent Cap (per hour)", 10, 50, 21, 1,
                                  help="Maximum number of agents allowed to be scheduled in any given hour.")
     p_min_agents = st.number_input("Min Agents (for search)", 1, 10, 1, 1)
     p_max_agents = st.number_input("Max Agents (for search)", 20, 100, 30, 1)
@@ -666,6 +681,34 @@ if st.button("Run Optimization", type="primary"):
                  delta_color="normal")
     
     st.header("Hourly Staffing Plan Comparison")
+    
+    # --- NEW: Add Staffing Summary Card ---
+    st.subheader("Overall Staffing Impact")
+
+    # Define the green box style (used for this card and the KPI cards below)
+    green_box_style = "background-color: #D4EDDA; color: #155724; border: 1px solid #C3E6CB; border-radius: 4px; padding: 2px 6px; font-weight: bold; font-size: 0.9em; margin-left: 10px;"
+
+    st.markdown(
+        f"""
+        <div style="background-color: #F3F6F9; border: 1px solid #E0E5EB; border-radius: 5px; padding: 20px; height: 100%;">
+        <h5 style="color: #0070D2; margin-top: 0;">Staffing Savings</h5>
+        <p style="font-size: 1.1em; line-height: 1.6;">
+        By using Agentforce, you can reduce your <b>peak staffing requirement by {summary['peak_savings']:.0f} agents</b> (from {summary['peak_baseline']:.0f} to {summary['peak_agentforce']:.0f}).
+        <br>
+        Over a 24-hour period, this results in a total savings of <b>{summary['savings']:.0f} agent-hours</b>
+        <span style="{green_box_style}">{summary['savings_pct']:.1f}% reduction</span>
+        </p>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+    
+    st.markdown("<br>", unsafe_allow_html=True) # Add some spacing
+    
+    # --- Prepare data for charting ---
+    
+    # Data for the BARS (24 rows, 1 per hour)
+    bar_data = combined_df.reset_index()
     
     # --- Prepare data for charting ---
     
@@ -739,15 +782,19 @@ if st.button("Run Optimization", type="primary"):
     
     col1, col2 = st.columns(2)
     
+    # Define the green box style
+    green_box_style = "background-color: #D4EDDA; color: #155724; border: 1px solid #C3E6CB; border-radius: 4px; padding: 2px 6px; font-weight: bold; font-size: 0.9em; margin-left: 10px;"
+
     # --- SLA Card ---
     with col1:
-        # Use markdown with inline HTML/CSS for a custom "card"
         st.markdown(
             f"""
             <div style="background-color: #F3F6F9; border: 1px solid #E0E5EB; border-radius: 5px; padding: 20px; height: 100%;">
             <h5 style="color: #0070D2; margin-top: 0;">Service Level (SLA)</h5>
             <p style="font-size: 1.1em; line-height: 1.6;">
-            With <b>Agentforce</b>, your weighted average SLA is <b>{summary['avg_sla_agentforce']:.1f}%</b>.
+            With <b>Agentforce</b>, your weighted average SLA is 
+            <b>{summary['avg_sla_agentforce']:.1f}%</b>
+            <span style="{green_box_style}">+{summary['sla_improvement_pp']:.1f} p.p.</span>
             <br>
             Without it, your SLA would be <b>{summary['avg_sla_baseline']:.1f}%</b>.
             </p>
@@ -763,7 +810,9 @@ if st.button("Run Optimization", type="primary"):
             <div style="background-color: #F3F6F9; border: 1px solid #E0E5EB; border-radius: 5px; padding: 20px; height: 100%;">
             <h5 style="color: #0070D2; margin-top: 0;">Abandon Rate</h5>
             <p style="font-size: 1.1em; line-height: 1.6;">
-            With <b>Agentforce</b>, your weighted average abandon rate is <b>{summary['avg_abandon_agentforce']:.1f}%</b>.
+            With <b>Agentforce</b>, your weighted average abandon rate is 
+            <b>{summary['avg_abandon_agentforce']:.1f}%</b>
+            <span style="{green_box_style}">-{summary['abandon_reduction_pp']:.1f} p.p.</span>
             <br>
             Without it, your abandon rate would be <b>{summary['avg_abandon_baseline']:.1f}%</b>.
             </p>
