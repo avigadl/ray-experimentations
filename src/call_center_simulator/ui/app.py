@@ -66,6 +66,13 @@ DEFAULT_HOURLY_CALL_RATES = {
     22: 40, 23: 30
 }
 
+# NEW: Default "Current" (unoptimized) staffing plan
+DEFAULT_HOURLY_STAFFING = {
+    0: 8, 1: 6, 2: 5, 3: 5, 4: 6, 5: 8, 6: 12, 7: 15,
+    8: 22, 9: 25, 10: 24, 11: 18, 12: 18, 13: 19, 14: 20,
+    15: 22, 16: 23, 17: 20, 18: 18, 19: 15, 20: 12, 21: 10,
+    22: 9, 23: 8
+}
 
 # =============================================================================
 # DATA MODELS (Original Simulation Code)
@@ -457,6 +464,40 @@ class StaffingOptimizer:
         
         return pd.DataFrame(results).set_index('hour')
 
+    def evaluate_hourly_plan(self, staffing_plan: Dict[int, int], 
+                             use_agentforce: bool = False,
+                             progress_callback: Optional[Callable] = None) -> pd.DataFrame:
+        """Evaluates a given hourly staffing plan"""
+        results = []
+        
+        for hour in sorted(staffing_plan.keys()):
+            num_agents = staffing_plan.get(hour, self.config.min_agents) # Get num agents from plan
+            
+            # Evaluate this specific staffing level
+            stats = self.evaluate_staffing_level(hour, num_agents, use_agentforce)
+            
+            s, s_std, s_n, a, a_std, a_n, d, d_std, d_n, _ = stats # Unpack all 10 stats
+
+            results.append({
+                'hour': hour,
+                'constrained_n': num_agents, # This is the "constrained" number
+                'call_rate': self.hourly_rates[hour],
+                'sla': s,
+                'sla_std': s_std,
+                'sla_n': s_n,
+                'abandon': a,
+                'abandon_std': a_std,
+                'abandon_n': a_n,
+                'deflected_rate': d,
+                'deflected_rate_std': d_std,
+                'deflected_rate_n': d_n
+            })
+            
+            if progress_callback:
+                progress_callback(hour + 1)
+        
+        return pd.DataFrame(results).set_index('hour')
+
 
 # =============================================================================
 # REFACTORED MAIN FUNCTION (for Streamlit)
@@ -464,140 +505,130 @@ class StaffingOptimizer:
 
 @st.cache_data  # <-- Cache the results of this expensive function
 def run_optimization(config: SimulationConfig, targets: TargetKPIs, 
-                     call_rates: Dict[int, int]) -> Tuple[pd.DataFrame, Dict[str, float]]:
+                     call_rates: Dict[int, int],
+                     current_staffing_plan: Optional[Dict[int, int]] = None
+                     ) -> Tuple[pd.DataFrame, Dict[str, float]]:
     """
     Refactored main function to run optimization and return results.
+    Now runs 3 scenarios if current_staffing_plan is provided.
     """
     random.seed(config.random_seed)
-    # Pass the call_rates to the optimizer
     optimizer = StaffingOptimizer(config, targets, call_rates)
     summary = {}
     
-    # This status box will contain the progress bar
+    # Check if we have a current plan to evaluate
+    has_current_plan = current_staffing_plan is not None
+
     with st.status("Running optimization...", expanded=True) as status:
         
-        total_steps = 48  # 24 hours * 2 plans
-        progress_bar = st.progress(0, text="Initializing...")
+        # Adjust total steps if we are running 3 plans
+        total_steps = 48 + 24 if has_current_plan else 48
         current_step = 0
+        progress_bar = st.progress(0, text="Initializing...")
 
-        def update_progress_baseline(hour):
+        def update_progress(plan_name: str, hour: int):
             nonlocal current_step
             current_step += 1
             progress = current_step / total_steps
-            progress_bar.progress(progress, text=f"Optimizing Baseline: Hour {hour}/24...")
-        
-        def update_progress_agentforce(hour):
-            nonlocal current_step
-            current_step += 1
-            progress = current_step / total_steps
-            progress_bar.progress(progress, text=f"Optimizing Agentforce: Hour {hour}/24...")
+            progress_bar.progress(progress, text=f"Optimizing {plan_name}: Hour {hour}/24...")
 
-        status.write("Finding baseline staffing plan (1/2)...")
-        baseline_plan = optimizer.find_hourly_plan(
+        # --- Run 1: Optimal Baseline ---
+        status.write("Finding Optimal Baseline plan (1/3)...")
+        optimal_baseline_df = optimizer.find_hourly_plan(
             use_agentforce=False, 
-            progress_callback=update_progress_baseline
+            progress_callback=lambda h: update_progress("Optimal Baseline", h)
         )
         
-        status.write("Finding Agentforce-enabled staffing plan (2/2)...")
-        agentforce_plan = optimizer.find_hourly_plan(
+        # --- Run 2: Optimal Agentforce ---
+        status.write("Finding Optimal Agentforce plan (2/3)...")
+        optimal_agentforce_df = optimizer.find_hourly_plan(
             use_agentforce=True, 
-            progress_callback=update_progress_agentforce
+            progress_callback=lambda h: update_progress("Optimal Agentforce", h)
         )
+        
+        # --- Run 3: Current Baseline (Conditional) ---
+        if has_current_plan:
+            status.write("Evaluating Current Baseline plan (3/3)...")
+            current_baseline_df = optimizer.evaluate_hourly_plan(
+                staffing_plan=current_staffing_plan,
+                use_agentforce=False, # We evaluate current plan without Agentforce
+                progress_callback=lambda h: update_progress("Current Baseline", h)
+            )
+            
+            # Rename for joining
+            current_baseline_df = current_baseline_df.rename(columns=lambda c: f"{c}_current_baseline" if c not in ['hour', 'call_rate'] else c)
         
         status.write("Combining results...")
         progress_bar.progress(1.0, text="Optimization complete!")
 
         # Rename columns before joining
-        baseline_plan = baseline_plan.rename(columns={
-            'optimal_n': 'optimal_baseline',
-            'constrained_n': 'constrained_baseline',
-            'sla': 'sla_baseline',
-            'sla_std': 'sla_std_baseline',
-            'sla_n': 'sla_n_baseline',
-            'abandon': 'abandon_baseline',
-            'abandon_std': 'abandon_std_baseline',
-            'abandon_n': 'abandon_n_baseline',
-            'deflected_rate': 'deflected_rate_baseline',      # <-- NEW
-            'deflected_rate_std': 'deflected_rate_std_baseline',  # <-- NEW
-            'deflected_rate_n': 'deflected_rate_n_baseline'       # <-- NEW
-        })
+        optimal_baseline_df = optimal_baseline_df.rename(columns=lambda c: f"{c}_optimal_baseline" if c not in ['hour', 'call_rate'] else c)
+        optimal_agentforce_df = optimal_agentforce_df.rename(columns=lambda c: f"{c}_optimal_agentforce" if c not in ['hour', 'call_rate'] else c)
         
-        agentforce_plan = agentforce_plan.rename(columns={
-            'optimal_n': 'optimal_agentforce',
-            'constrained_n': 'constrained_agentforce',
-            'sla': 'sla_agentforce',
-            'sla_std': 'sla_std_agentforce',
-            'sla_n': 'sla_n_agentforce',
-            'abandon': 'abandon_agentforce',
-            'abandon_std': 'abandon_std_agentforce',
-            'abandon_n': 'abandon_n_agentforce',
-            'deflected_rate': 'deflected_rate_agentforce',      # <-- NEW
-            'deflected_rate_std': 'deflected_rate_std_agentforce',  # <-- NEW
-            'deflected_rate_n': 'deflected_rate_n_agentforce'       # <-- NEW
-        })
+        # Join the two optimal dataframes
+        combined = optimal_baseline_df.join(
+            optimal_agentforce_df.drop(columns=['call_rate'], errors='ignore')
+        )
         
-        # Define the specific columns to join from the agentforce plan
-        # This avoids the 'call_rate' conflict
-        agentforce_cols_to_join = [
-            'optimal_agentforce', 'constrained_agentforce',
-            'sla_agentforce', 'sla_std_agentforce', 'sla_n_agentforce',
-            'abandon_agentforce', 'abandon_std_agentforce', 'abandon_n_agentforce',
-            'deflected_rate_agentforce', 'deflected_rate_std_agentforce', 'deflected_rate_n_agentforce' # <-- NEW
-        ]
+        # If we have a current plan, join it as well
+        if has_current_plan:
+            combined = combined.join(
+                current_baseline_df.drop(columns=['call_rate'], errors='ignore')
+            )
 
-        # Join the two dataframes
-        combined = baseline_plan.join(agentforce_plan[agentforce_cols_to_join])
         
+        # --- Calculate Staffing Totals ---
+        optimal_baseline_total = combined['constrained_n_optimal_baseline'].sum()
+        optimal_agentforce_total = combined['constrained_n_optimal_agentforce'].sum()
         
-        # --- Calculate Peak Staff Savings ---
-        peak_baseline = combined['constrained_baseline'].max()
-        peak_agentforce = combined['constrained_agentforce'].max()
-        peak_savings = peak_baseline - peak_agentforce
+        summary = {
+            "optimal_baseline_total": optimal_baseline_total,
+            "optimal_agentforce_total": optimal_agentforce_total,
+        }
 
-        # --- Calculate Staffing Savings (Agent-Hours) ---
-        baseline_total = combined['constrained_baseline'].sum()
-        agentforce_total = combined['constrained_agentforce'].sum()
-        savings = baseline_total - agentforce_total
-        savings_pct = (savings / baseline_total) * 100 if baseline_total > 0 else 0
-        
+        # --- Calculate Peak Staff ---
+        summary["peak_optimal_baseline"] = combined['constrained_n_optimal_baseline'].max()
+        summary["peak_optimal_agentforce"] = combined['constrained_n_optimal_agentforce'].max()
         
         # --- Calculate Weighted Average KPIs ---
         total_calls = combined['call_rate'].sum()
         
         if total_calls > 0:
-            avg_sla_baseline = (combined['sla_baseline'] * combined['call_rate']).sum() / total_calls
-            avg_abandon_baseline = (combined['abandon_baseline'] * combined['call_rate']).sum() / total_calls
-            avg_sla_agentforce = (combined['sla_agentforce'] * combined['call_rate']).sum() / total_calls
-            avg_abandon_agentforce = (combined['abandon_agentforce'] * combined['call_rate']).sum() / total_calls
-            avg_deflected_rate_baseline = (combined['deflected_rate_baseline'] * combined['call_rate']).sum() / total_calls # <-- NEW
-            avg_deflected_rate_agentforce = (combined['deflected_rate_agentforce'] * combined['call_rate']).sum() / total_calls # <-- NEW
-        else:
-            avg_sla_baseline, avg_abandon_baseline, avg_sla_agentforce, avg_abandon_agentforce = (np.nan, np.nan, np.nan, np.nan)
-            avg_deflected_rate_baseline, avg_deflected_rate_agentforce = (np.nan, np.nan) # <-- NEW
+            # Optimal Baseline KPIs
+            summary["avg_sla_optimal_baseline"] = (combined['sla_optimal_baseline'] * combined['call_rate']).sum() / total_calls
+            summary["avg_abandon_optimal_baseline"] = (combined['abandon_optimal_baseline'] * combined['call_rate']).sum() / total_calls
+            summary["avg_deflected_rate_optimal_baseline"] = (combined['deflected_rate_optimal_baseline'] * combined['call_rate']).sum() / total_calls
+
+            # Optimal Agentforce KPIs
+            summary["avg_sla_optimal_agentforce"] = (combined['sla_optimal_agentforce'] * combined['call_rate']).sum() / total_calls
+            summary["avg_abandon_optimal_agentforce"] = (combined['abandon_optimal_agentforce'] * combined['call_rate']).sum() / total_calls
+            summary["avg_deflected_rate_optimal_agentforce"] = (combined['deflected_rate_optimal_agentforce'] * combined['call_rate']).sum() / total_calls
         
-        # --- Calculate Percentage Point (p.p.) diff ---
-        sla_improvement_pp = avg_sla_agentforce - avg_sla_baseline
-        abandon_reduction_pp = avg_abandon_baseline - avg_abandon_agentforce # Positive is good
+        # --- Calculate Current Plan Stats (if available) ---
+        if has_current_plan:
+            current_baseline_total = combined['constrained_n_current_baseline'].sum()
+            summary["current_baseline_total"] = current_baseline_total
+            summary["peak_current_baseline"] = combined['constrained_n_current_baseline'].max()
+
+            if total_calls > 0:
+                summary["avg_sla_current_baseline"] = (combined['sla_current_baseline'] * combined['call_rate']).sum() / total_calls
+                summary["avg_abandon_current_baseline"] = (combined['abandon_current_baseline'] * combined['call_rate']).sum() / total_calls
+                summary["avg_deflected_rate_current_baseline"] = (combined['deflected_rate_current_baseline'] * combined['call_rate']).sum() / total_calls
+
+            # --- Calculate Level 1 Savings (Current vs. Optimal Baseline) ---
+            summary["l1_savings_hours"] = current_baseline_total - optimal_baseline_total
+            summary["l1_savings_pct"] = (summary["l1_savings_hours"] / current_baseline_total) * 100 if current_baseline_total > 0 else 0
+            summary["l1_peak_savings"] = summary["peak_current_baseline"] - summary["peak_optimal_baseline"]
+            
+            # --- Calculate Level 2 Savings (Current vs. Optimal Agentforce) ---
+            summary["l2_savings_hours"] = current_baseline_total - optimal_agentforce_total
+            summary["l2_savings_pct"] = (summary["l2_savings_hours"] / current_baseline_total) * 100 if current_baseline_total > 0 else 0
+            summary["l2_peak_savings"] = summary["peak_current_baseline"] - summary["peak_optimal_agentforce"]
+
+            # --- Calculate KPI Diffs (for Agentforce vs Current) ---
+            summary["sla_improvement_pp"] = summary["avg_sla_optimal_agentforce"] - summary["avg_sla_current_baseline"]
+            summary["abandon_reduction_pp"] = summary["avg_abandon_current_baseline"] - summary["avg_abandon_optimal_agentforce"]
         
-        
-        summary = {
-            "baseline_total": baseline_total,
-            "agentforce_total": agentforce_total,
-            "savings": savings,
-            "savings_pct": savings_pct,
-            "peak_baseline": peak_baseline,
-            "peak_agentforce": peak_agentforce,
-            "peak_savings": peak_savings,
-            "avg_sla_baseline": avg_sla_baseline,
-            "avg_sla_agentforce": avg_sla_agentforce,
-            "avg_abandon_baseline": avg_abandon_baseline,
-            "avg_abandon_agentforce": avg_abandon_agentforce,
-            "avg_deflected_rate_baseline": avg_deflected_rate_baseline, # <-- NEW
-            "avg_deflected_rate_agentforce": avg_deflected_rate_agentforce, # <-- NEW
-            "sla_improvement_pp": sla_improvement_pp,
-            "abandon_reduction_pp": abandon_reduction_pp
-        }
-    
     return combined, summary
 
 # =============================================================================
@@ -610,20 +641,18 @@ st.markdown("Compare baseline staffing vs. Agentforce-enabled staffing plans.")
 
 # --- Sidebar for Inputs ---
 
-with st.sidebar.expander("📞 Call Volume", expanded=True):
+with st.sidebar.expander("📞 Call Volume & Staffing", expanded=True):
     uploaded_file = st.file_uploader(
-        "Upload Custom Call Volume (CSV)", 
+        "Upload Custom Volume & Staffing (CSV)", 
         type="csv",
-        help="CSV must have 'hour' (0-23) and 'calls' columns."
+        help="CSV must have 'hour' (0-23) and 'calls' columns. Can optionally include 'current_agents'."
     )
 
-# --- NEW: Wrapped in an expander ---
-with st.sidebar.expander("Target KPIs", expanded=True):
+with st.sidebar.expander("🎯 Target KPIs", expanded=True):
     p_sla_target = st.slider("SLA Target (%)", 50.0, 100.0, 80.0, 1.0,
                              help="Target percentage of calls answered within the SLA threshold.")
     p_abandon_target = st.slider("Abandon Target (%)", 1.0, 20.0, 5.0, 0.5,
                                  help="Target maximum percentage of calls that abandon.")
-# --- END NEW EXPANDER ---
 
 
 st.sidebar.header("Simulation Parameters")
@@ -673,16 +702,28 @@ targets = TargetKPIs(
     utilization_target=75.0
 )
 
-# --- Load Call Rates ---
+# --- Load Call Rates & Staffing Plan ---
 call_rates_dict = DEFAULT_HOURLY_CALL_RATES
+current_staffing_dict = DEFAULT_HOURLY_STAFFING  # <-- SET THE NEW DEFAULT
+
 if uploaded_file is not None:
     try:
         df = pd.read_csv(uploaded_file)
         # Validate columns
         if 'hour' in df.columns and 'calls' in df.columns:
-            # Convert to dictionary {0: 30, 1: 20, ...}
+            # Overwrite default call rates
             call_rates_dict = df.set_index('hour')['calls'].to_dict()
             st.sidebar.success(f"Loaded {len(call_rates_dict)} hourly call rates.")
+            
+            # --- NEW: Check for optional current_agents ---
+            if 'current_agents' in df.columns:
+                # Overwrite default staffing
+                current_staffing_dict = df.set_index('hour')['current_agents'].to_dict()
+                st.sidebar.success(f"Loaded {len(current_staffing_dict)} hourly staff levels.")
+            else:
+                st.sidebar.info("No 'current_agents' column found. Disabling current plan analysis.")
+                current_staffing_dict = None # Set to None to disable analysis
+                
         else:
             st.sidebar.error("CSV must have 'hour' and 'calls' columns.")
             uploaded_file = None # Revert to default
@@ -693,67 +734,99 @@ if uploaded_file is not None:
 # --- Main Page Body ---
 if st.button("Run Optimization", type="primary"):
     # Call the refactored, cached function
-    # We now pass the call_rates_dict to the simulation
-    combined_df, summary = run_optimization(config, targets, call_rates_dict)
+    combined_df, summary = run_optimization(config, targets, call_rates_dict, current_staffing_dict)
         
     st.header("KPI Summary")
-    # Add a 4th column for the new metric
-    col1, col2, col3, col4 = st.columns(4) 
-    col1.metric("Baseline Agent-Hours", f"{summary['baseline_total']:.0f}")
-    col2.metric("Agentforce Agent-Hours", f"{summary['agentforce_total']:.0f}")
-    col3.metric("Agent-Hour Savings", 
-                 f"{summary['savings_pct']:.1f}%", 
-                 delta=f"{summary['savings']:.0f} hours saved",
-                 delta_color="normal")
-    # Add the new Deflection Rate metric
     
-    # NEW: Calculate Deflection Rate pp difference
-    deflection_improvement_pp = summary['avg_deflected_rate_agentforce'] - summary['avg_deflected_rate_baseline']
+    # --- Show 3 or 4 columns based on loaded data ---
+    has_current_plan = 'current_baseline_total' in summary
+    cols = st.columns(4) if has_current_plan else st.columns(3)
+    
+    if has_current_plan:
+        cols[0].metric("Current Agent-Hours", f"{summary['current_baseline_total']:.0f}")
+        cols[1].metric("Optimal Baseline Hours", f"{summary['optimal_baseline_total']:.0f}")
+        cols[2].metric("Optimal Agentforce Hours", f"{summary['optimal_agentforce_total']:.0f}")
+        
+        deflection_improvement_pp = summary['avg_deflected_rate_optimal_agentforce'] - summary['avg_deflected_rate_current_baseline']
+        cols[3].metric(
+            "Agentforce Deflection", 
+            f"{summary['avg_deflected_rate_optimal_agentforce']:.1f}%",
+            delta=f"{deflection_improvement_pp:.1f} p.p.",
+            delta_color="normal",
+            help="Weighted avg. % of total calls handled by Agentforce vs. Current Baseline."
+        )
+    else:
+        # Fallback to old 2-plan view if no CSV is loaded
+        cols[0].metric("Optimal Baseline Hours", f"{summary['optimal_baseline_total']:.0f}")
+        cols[1].metric("Optimal Agentforce Hours", f"{summary['optimal_agentforce_total']:.0f}")
+        
+        deflection_improvement_pp = summary['avg_deflected_rate_optimal_agentforce'] - summary['avg_deflected_rate_optimal_baseline']
+        cols[2].metric(
+            "Agentforce Deflection", 
+            f"{summary['avg_deflected_rate_optimal_agentforce']:.1f}%",
+            delta=f"{deflection_improvement_pp:.1f} p.p.",
+            delta_color="normal",
+            help="Weighted avg. % of total calls handled by Agentforce vs. Optimal Baseline."
+        )
 
-    col4.metric(
-        "Deflection Rate", 
-        f"{summary['avg_deflected_rate_agentforce']:.1f}%",
-        delta=f"{deflection_improvement_pp:.1f} p.p.", # Always positive or zero
-        delta_color="normal", # Neutral color as this is generally an improvement
-        help="Weighted avg. % of total calls handled by Agentforce."
-    )
     
     st.header("Hourly Staffing Plan Comparison")
     
-    # --- Add Staffing Summary Card ---
-    st.subheader("Overall Staffing Impact")
-
-    # Define the green box style (used for this card and the KPI cards below)
+    # --- Define Box Styles ---
     green_box_style = "background-color: #D4EDDA; color: #155724; border: 1px solid #C3E6CB; border-radius: 4px; padding: 2px 6px; font-weight: bold; font-size: 0.9em; margin-left: 10px;"
     red_box_style = "background-color: #F8D7DA; color: #721C24; border: 1px solid #F5C6CB; border-radius: 4px; padding: 2px 6px; font-weight: bold; font-size: 0.9em; margin-left: 10px;"
 
-
-    st.markdown(
-        f"""
-        <div style="background-color: #F3F6F9; border: 1px solid #E0E5EB; border-radius: 5px; padding: 20px; height: 100%;">
-        <h5 style="color: #0070D2; margin-top: 0;">Staffing Savings</h5>
-        <p style="font-size: 1.1em; line-height: 1.6;">
-        By using Agentforce, you can reduce your <b>peak staffing requirement by {summary['peak_savings']:.0f} agents</b> (from {summary['peak_baseline']:.0f} to {summary['peak_agentforce']:.0f}).
-        <br>
-        Over a 24-hour period, this results in a total savings of <b>{summary['savings']:.0f} agent-hours</b>
-        <span style="{green_box_style}">{summary['savings_pct']:.1f}% reduction</span>
-        </p>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+    # --- NEW: Two-Level Savings Cards (only show if current plan was loaded) ---
+    if has_current_plan:
+        st.subheader("Overall Staffing Impact")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown(
+                f"""
+                <div style="background-color: #F3F6F9; border: 1px solid #E0E5EB; border-radius: 5px; padding: 20px; height: 100%;">
+                <h5 style="color: #0070D2; margin-top: 0;">Level 1: Staffing Optimization</h5>
+                <p style="font-size: 1.1em; line-height: 1.6;">
+                By optimizing your <b>current plan</b>, you can reduce peak staffing by <b>{summary['l1_peak_savings']:.0f} agents</b>
+                (from {summary['peak_current_baseline']:.0f} to {summary['peak_optimal_baseline']:.0f}).
+                <br>
+                This saves <b>{summary['l1_savings_hours']:.0f} agent-hours</b>
+                <span style="{green_box_style}">{summary['l1_savings_pct']:.1f}% reduction</span>
+                </p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+        with col2:
+            st.markdown(
+                f"""
+                <div style="background-color: #F3F6F9; border: 1px solid #E0E5EB; border-radius: 5px; padding: 20px; height: 100%;">
+                <h5 style="color: #0070D2; margin-top: 0;">Level 2: Agentforce Optimization</h5>
+                <p style="font-size: 1.1em; line-height: 1.6;">
+                By adding <b>Agentforce</b> to your <b>current plan</b>, you can reduce peak staffing by <b>{summary['l2_peak_savings']:.0f} agents</b>
+                (from {summary['peak_current_baseline']:.0f} to {summary['peak_optimal_agentforce']:.0f}).
+                <br>
+                This saves <b>{summary['l2_savings_hours']:.0f} agent-hours</b>
+                <span style="{green_box_style}">{summary['l2_savings_pct']:.1f}% total reduction</span>
+                </p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+        st.markdown("<br>", unsafe_allow_html=True)
     
-    st.markdown("<br>", unsafe_allow_html=True) # Add some spacing
     
     # --- Prepare data for charting ---
-    
-    # Data for the BARS (24 rows, 1 per hour)
     bar_data = combined_df.reset_index()
 
-    # Data for the LINES (48 rows, 2 per hour)
+    # Define value_vars based on loaded data
+    value_vars = ['constrained_n_optimal_baseline', 'constrained_n_optimal_agentforce']
+    if has_current_plan:
+        value_vars.insert(0, 'constrained_n_current_baseline') # Add to beginning
+
     line_data = combined_df.reset_index().melt(
         id_vars=['hour', 'call_rate'], 
-        value_vars=['constrained_baseline', 'constrained_agentforce'],
+        value_vars=value_vars,
         var_name='Staffing Plan',
         value_name='Required Agents'
     )
@@ -761,264 +834,205 @@ if st.button("Run Optimization", type="primary"):
     # --- Define Colors ---
     salesforce_blue = "#0070D2"
     salesforce_gray = "#54698D"
-    background_bar_color = "#E0E5EB" # A light, neutral gray-blue
-
-    # --- Create Charts ---
-
-    # Base chart to define shared X-axis
-    base = alt.Chart().encode(
-        x=alt.X('hour:O', title='Hour of Day')
-    )
+    current_plan_color = "#FF7F0E" # Orange for "current"
+    background_bar_color = "#E0E5EB" 
     
-    # Layer 1: Bar chart for Call Volume
-    # Use the 24-row bar_data
+    # Define color scale
+    plan_domain = ['constrained_n_current_baseline', 'constrained_n_optimal_baseline', 'constrained_n_optimal_agentforce']
+    plan_range = [current_plan_color, salesforce_gray, salesforce_blue]
+    if not has_current_plan:
+        plan_domain = plan_domain[1:]
+        plan_range = plan_range[1:]
+
+    # --- Create Staffing Chart ---
+    base = alt.Chart().encode(x=alt.X('hour:O', title='Hour of Day'))
+    
     call_rate_bars = base.mark_bar(opacity=0.6, color=background_bar_color).encode(
         y=alt.Y('call_rate:Q', 
                 title='Call Volume', 
                 axis=alt.Axis(titleColor='#54698D'),
                 scale=alt.Scale(padding=0.2, domainMin=0)),
         tooltip=['hour', 'call_rate']
-    ).properties(
-        data=bar_data  # <-- Explicitly use the 24-row data
-    )
+    ).properties(data=bar_data)
     
-    # Layer 2: Line chart for Required Agents
-    # Use the 48-row line_data
     required_agents_lines = base.mark_line(point=True).encode(
         y=alt.Y('Required Agents:Q', 
                 title='Required Agents', 
                 axis=alt.Axis(titleColor=salesforce_blue),
                 scale=alt.Scale(padding=0.2, domainMin=0)),
         color=alt.Color('Staffing Plan:N', title='Staffing Plan',
-                        scale=alt.Scale(domain=['constrained_baseline', 'constrained_agentforce'],
-                                        range=[salesforce_blue, salesforce_gray])),
+                        scale=alt.Scale(domain=plan_domain, range=plan_range)),
         tooltip=['hour', 'Staffing Plan', 'Required Agents']
-    ).properties(
-        data=line_data  # <-- Explicitly use the 48-row data
-    ).interactive()
+    ).properties(data=line_data).interactive()
     
-    # Combine the charts with independent Y-axes
     final_chart = alt.layer(call_rate_bars, required_agents_lines).resolve_scale(
-        y='independent' # Key for dual-axis
+        y='independent'
     ).properties(
         title="Hourly Staffing vs. Call Volume"
-    ).configure_axis(
-        grid=False
-    ).configure_view(
-        strokeWidth=0
-    )
+    ).configure_axis(grid=False).configure_view(strokeWidth=0)
     
     st.altair_chart(final_chart, use_container_width=True)
 
-    st.header("Hourly KPI Comparison (SLA, Abandon, & Deflection)")
     
-    # --- Add KPI Summary Cards ---
-    st.subheader("Overall KPI Performance (Weighted by Call Volume)")
+    st.header("Hourly KPI Comparison")
     
-    col1, col2 = st.columns(2)
-    
-    # --- SLA Card ---
-    with col1:
-        st.markdown(
-            f"""
-            <div style="background-color: #F3F6F9; border: 1px solid #E0E5EB; border-radius: 5px; padding: 20px; height: 100%;">
-            <h5 style="color: #0070D2; margin-top: 0;">Service Level (SLA)</h5>
-            <p style="font-size: 1.1em; line-height: 1.6;">
-            With <b>Agentforce</b>, your SLA is 
-            <b>{summary['avg_sla_agentforce']:.1f}%</b>
-            <span style="{green_box_style}">+{summary['sla_improvement_pp']:.1f} p.p.</span>
-            <br>
-            Without it, your SLA would be <b>{summary['avg_sla_baseline']:.1f}%</b>.
-            </p>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-    
-    # --- Abandon Rate Card ---
-    with col2:
-        # Determine the style based on whether abandon rate improved or worsened
-        abandon_delta_style = green_box_style if summary['abandon_reduction_pp'] >= 0 else red_box_style
-        abandon_delta_prefix = "-" if summary['abandon_reduction_pp'] >= 0 else "+" # Lower is good, so '-' means reduction
-        
-        st.markdown(
-            f"""
-            <div style="background-color: #F3F6F9; border: 1px solid #E0E5EB; border-radius: 5px; padding: 20px; height: 100%;">
-            <h5 style="color: #0070D2; margin-top: 0;">Abandon Rate</h5>
-            <p style="font-size: 1.1em; line-height: 1.6;">
-            With <b>Agentforce</b>, your abandon rate is 
-            <b>{summary['avg_abandon_agentforce']:.1f}%</b>
-            <span style="{abandon_delta_style}">{abandon_delta_prefix}{abs(summary['abandon_reduction_pp']):.1f} p.p.</span>
-            <br>
-            Without it, your abandon rate would be <b>{summary['avg_abandon_baseline']:.1f}%</b>.
-            </p>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-    st.markdown("<br>", unsafe_allow_html=True) # Add some spacing
+    # --- KPI Summary Cards (only show if current plan was loaded) ---
+    if has_current_plan:
+        st.subheader("Overall KPI Performance (Weighted by Call Volume)")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown(
+                f"""
+                <div style="background-color: #F3F6F9; border: 1px solid #E0E5EB; border-radius: 5px; padding: 20px; height: 100%;">
+                <h5 style="color: #0070D2; margin-top: 0;">Service Level (SLA)</h5>
+                <p style="font-size: 1.1em; line-height: 1.6;">
+                With <b>Agentforce</b>, your SLA is 
+                <b>{summary['avg_sla_optimal_agentforce']:.1f}%</b>
+                <span style="{green_box_style}">+{summary['sla_improvement_pp']:.1f} p.p.</span>
+                <br>
+                Your <b>current plan</b> SLA is <b>{summary['avg_sla_current_baseline']:.1f}%</b>.
+                </p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+        with col2:
+            abandon_delta_style = green_box_style if summary['abandon_reduction_pp'] >= 0 else red_box_style
+            abandon_delta_prefix = "-" if summary['abandon_reduction_pp'] >= 0 else "+"
+            
+            st.markdown(
+                f"""
+                <div style="background-color: #F3F6F9; border: 1px solid #E0E5EB; border-radius: 5px; padding: 20px; height: 100%;">
+                <h5 style="color: #0070D2; margin-top: 0;">Abandon Rate</h5>
+                <p style="font-size: 1.1em; line-height: 1.6;">
+                With <b>Agentforce</b>, your abandon rate is 
+                <b>{summary['avg_abandon_optimal_agentforce']:.1f}%</b>
+                <span style="{abandon_delta_style}">{abandon_delta_prefix}{abs(summary['abandon_reduction_pp']):.1f} p.p.</span>
+                <br>
+                Your <b>current plan</b> abandon rate is <b>{summary['avg_abandon_current_baseline']:.1f}%</b>.
+                </p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+        st.markdown("<br>", unsafe_allow_html=True)
 
     # --- Prepare data for KPI chart ---
-    
-    # 1. Transform from "wide" to "long"
     df = combined_df.reset_index()
-    df = pd.wide_to_long(df, 
-                         stubnames=['sla', 'sla_std', 'sla_n', 
-                                    'abandon', 'abandon_std', 'abandon_n', 
-                                    'deflected_rate', 'deflected_rate_std', 'deflected_rate_n'], # <-- NEW
+    
+    stubnames = [
+        'sla', 'sla_std', 'sla_n', 
+        'abandon', 'abandon_std', 'abandon_n', 
+        'deflected_rate', 'deflected_rate_std', 'deflected_rate_n'
+    ]
+    suffix = '(optimal_baseline|optimal_agentforce)'
+    if has_current_plan:
+        suffix = '(current_baseline|optimal_baseline|optimal_agentforce)'
+
+    df_long = pd.wide_to_long(df, 
+                         stubnames=stubnames,
                          i='hour', 
                          j='Plan', 
                          sep='_', 
-                         suffix='(baseline|agentforce)').reset_index()
+                         suffix=suffix).reset_index()
 
-    # 2. Stack SLA, Abandon, and Deflected stats into a single tidy dataframe
-    sla_df = df[['hour', 'Plan', 'sla', 'sla_std', 'sla_n']].copy()
-    sla_df['KPI'] = 'SLA'
-    sla_df = sla_df.rename(columns={'sla': 'Percentage', 'sla_std': 'StdDev', 'sla_n': 'N'})
+    # Stack SLA, Abandon, and Deflected stats
+    kpi_dfs = []
+    for kpi in ['sla', 'abandon', 'deflected_rate']:
+        kpi_renamed = {'sla': 'SLA', 'abandon': 'Abandon', 'deflected_rate': 'Deflected Rate'}[kpi]
+        
+        temp_df = df_long[['hour', 'Plan', kpi, f'{kpi}_std', f'{kpi}_n']].copy()
+        temp_df['KPI'] = kpi_renamed
+        temp_df = temp_df.rename(columns={
+            kpi: 'Percentage', 
+            f'{kpi}_std': 'StdDev', 
+            f'{kpi}_n': 'N'
+        })
+        kpi_dfs.append(temp_df)
 
-    abandon_df = df[['hour', 'Plan', 'abandon', 'abandon_std', 'abandon_n']].copy()
-    abandon_df['KPI'] = 'Abandon'
-    abandon_df = abandon_df.rename(columns={'abandon': 'Percentage', 'abandon_std': 'StdDev', 'abandon_n': 'N'})
-
-    deflected_df = df[['hour', 'Plan', 'deflected_rate', 'deflected_rate_std', 'deflected_rate_n']].copy() # <-- NEW
-    deflected_df['KPI'] = 'Deflected Rate' # <-- NEW
-    deflected_df = deflected_df.rename(columns={'deflected_rate': 'Percentage', 'deflected_rate_std': 'StdDev', 'deflected_rate_n': 'N'}) # <-- NEW
-
-    kpi_data = pd.concat([sla_df, abandon_df, deflected_df]) # <-- NEW
+    kpi_data = pd.concat(kpi_dfs)
     
-    # 3. Calculate 95% Confidence Interval
+    # Calculate 95% Confidence Interval
     kpi_data['StdErr'] = kpi_data['StdDev'] / np.sqrt(kpi_data['N'])
     kpi_data['CI_Margin'] = 1.96 * kpi_data['StdErr']
     kpi_data['CI_Lower'] = (kpi_data['Percentage'] - kpi_data['CI_Margin']).clip(lower=0)
     kpi_data['CI_Upper'] = kpi_data['Percentage'] + kpi_data['CI_Margin']
 
+    # --- Define KPI Chart Colors ---
+    kpi_domain = ['optimal_baseline', 'optimal_agentforce']
+    kpi_range = [salesforce_gray, salesforce_blue]
+    if has_current_plan:
+        kpi_domain.insert(0, 'current_baseline')
+        kpi_range.insert(0, current_plan_color)
 
-    # --- Define Colors ---
-    salesforce_blue = "#0070D2"
-    salesforce_gray = "#54698D"
-
-    # --- Chart 1: SLA ---
-    
-    # Filter data for SLA
-    sla_data = kpi_data[kpi_data['KPI'] == 'SLA'].copy()
-    
-    # SLA Target line
-    sla_target_line = alt.Chart(pd.DataFrame({'y': [targets.sla_target]})) \
-        .mark_rule(color='green', strokeDash=[5,5], size=2) \
-        .encode(y='y:Q', tooltip=alt.value(f'SLA Target: {targets.sla_target}%'))
-
-    # SLA 95% Confidence Interval Area
-    sla_ci_area = alt.Chart(sla_data).mark_area(opacity=0.3).encode(
-        x=alt.X('hour:O', title=None, axis=None), # Hide x-axis for all but bottom chart
-        y=alt.Y('CI_Lower:Q', title='SLA (%)'),
-        y2=alt.Y2('CI_Upper:Q'),
+    # --- Base Chart for KPIs (with full kpi_data) ---
+    kpi_base_chart = alt.Chart(kpi_data).mark_line(point=True).encode(
+        x=alt.X('hour:O'),
+        y=alt.Y('Percentage:Q'),
         color=alt.Color('Plan:N', 
-                        scale={'domain': ['baseline', 'agentforce'],
-                               'range': [salesforce_blue, salesforce_gray]},
+                        scale=alt.Scale(domain=kpi_domain, range=kpi_range),
                         legend=alt.Legend(title="Plan", orient="bottom")),
         tooltip=[
             alt.Tooltip('hour:O'),
             alt.Tooltip('Plan:N'),
-            alt.Tooltip('Percentage:Q', format='.1f', title='Mean SLA'),
+            alt.Tooltip('Percentage:Q', format='.1f', title='Mean'),
             alt.Tooltip('CI_Lower:Q', format='.1f', title='95% CI Lower'),
             alt.Tooltip('CI_Upper:Q', format='.1f', title='95% CI Upper')
         ]
-    )
-
-    # SLA Mean Line
-    sla_lines = alt.Chart(sla_data).mark_line(point=True).encode(
-        x=alt.X('hour:O', axis=None),
-        y=alt.Y('Percentage:Q'),
-        color=alt.Color('Plan:N'),
     ).interactive()
 
-    # Layer SLA chart, CI, and target line
-    sla_chart = alt.layer(sla_ci_area, sla_lines, sla_target_line).properties(
+    kpi_ci_area = alt.Chart(kpi_data).mark_area(opacity=0.3).encode(
+        x=alt.X('hour:O'),
+        y=alt.Y('CI_Lower:Q'),
+        y2=alt.Y2('CI_Upper:Q'),
+        color=alt.Color('Plan:N', legend=None)
+    )
+
+    # --- Chart 1: SLA ---
+    sla_target_line = alt.Chart(pd.DataFrame({'y': [targets.sla_target]})) \
+        .mark_rule(color='green', strokeDash=[5,5], size=2) \
+        .encode(y='y:Q', tooltip=alt.value(f'SLA Target: {targets.sla_target}%'))
+    
+    # --- FIX: Filter the base charts using transform_filter BEFORE layering ---
+    sla_chart = alt.layer(
+        kpi_ci_area.transform_filter(alt.datum.KPI == 'SLA'), 
+        kpi_base_chart.transform_filter(alt.datum.KPI == 'SLA'), 
+        sla_target_line
+    ).properties(
         title='Service Level Agreement (SLA) with 95% Confidence Interval'
-    ).resolve_scale(
-        y='shared' # Ensure all layers use the same Y axis
+    ).resolve_scale(y='shared').encode(
+        x=alt.X('hour:O', title=None, axis=None),
+        y=alt.Y('Percentage:Q', title='SLA (%)', scale=alt.Scale(padding=0.2))
     )
 
     # --- Chart 2: Abandon Rate ---
-
-    # Filter data for Abandon
-    abandon_data = kpi_data[kpi_data['KPI'] == 'Abandon'].copy()
-
-    # Abandon Target line
     abandon_target_line = alt.Chart(pd.DataFrame({'y': [targets.abandon_target]})) \
         .mark_rule(color='red', strokeDash=[5,5], size=2) \
         .encode(y='y:Q', tooltip=alt.value(f'Abandon Target: {targets.abandon_target}%'))
-
-    # Abandon 95% Confidence Interval Area
-    abandon_ci_area = alt.Chart(abandon_data).mark_area(opacity=0.3).encode(
-        x=alt.X('hour:O', title=None, axis=None), # Hide x-axis
-        y=alt.Y('CI_Lower:Q', title='Abandon Rate (%)'),
-        y2=alt.Y2('CI_Upper:Q'),
-        color=alt.Color('Plan:N', 
-                        scale={'domain': ['baseline', 'agentforce'],
-                               'range': [salesforce_blue, salesforce_gray]},
-                        legend=None), # Hide legend for this chart
-        tooltip=[
-            alt.Tooltip('hour:O'),
-            alt.Tooltip('Plan:N'),
-            alt.Tooltip('Percentage:Q', format='.1f', title='Mean Abandon'),
-            alt.Tooltip('CI_Lower:Q', format='.1f', title='95% CI Lower'),
-            alt.Tooltip('CI_Upper:Q', format='.1f', title='95% CI Upper')
-        ]
-    )
     
-    # Abandon Mean Line
-    abandon_lines = alt.Chart(abandon_data).mark_line(point=True).encode(
-        x=alt.X('hour:O', axis=None),
-        y=alt.Y('Percentage:Q'),
-        color=alt.Color('Plan:N'),
-    ).interactive()
-    
-    # Layer Abandon chart, CI, and target line
-    abandon_chart = alt.layer(abandon_ci_area, abandon_lines, abandon_target_line).properties(
+    # --- FIX: Filter the base charts using transform_filter BEFORE layering ---
+    abandon_chart = alt.layer(
+        kpi_ci_area.transform_filter(alt.datum.KPI == 'Abandon'), 
+        kpi_base_chart.transform_filter(alt.datum.KPI == 'Abandon'), 
+        abandon_target_line
+    ).properties(
         title='Abandon Rate with 95% Confidence Interval'
-    ).resolve_scale(
-        y='shared' 
-    )
-
-    # --- Chart 3: Deflected Rate (NEW) ---
-
-    # Filter data for Deflected Rate
-    deflected_data = kpi_data[kpi_data['KPI'] == 'Deflected Rate'].copy()
-
-    # Deflected 95% Confidence Interval Area
-    deflected_ci_area = alt.Chart(deflected_data).mark_area(opacity=0.3).encode(
-        x=alt.X('hour:O', title='Hour of Day'), # Show x-axis only on bottom chart
-        y=alt.Y('CI_Lower:Q', title='Deflected Rate (%)'),
-        y2=alt.Y2('CI_Upper:Q'),
-        color=alt.Color('Plan:N', 
-                        scale={'domain': ['baseline', 'agentforce'],
-                               'range': [salesforce_blue, salesforce_gray]},
-                        legend=None), # Hide legend
-        tooltip=[
-            alt.Tooltip('hour:O'),
-            alt.Tooltip('Plan:N'),
-            alt.Tooltip('Percentage:Q', format='.1f', title='Mean Deflected'),
-            alt.Tooltip('CI_Lower:Q', format='.1f', title='95% CI Lower'),
-            alt.Tooltip('CI_Upper:Q', format='.1f', title='95% CI Upper')
-        ]
+    ).resolve_scale(y='shared').encode(
+        x=alt.X('hour:O', title=None, axis=None),
+        y=alt.Y('Percentage:Q', title='Abandon Rate (%)', scale=alt.Scale(padding=0.2))
     )
     
-    # Deflected Mean Line
-    deflected_lines = alt.Chart(deflected_data).mark_line(point=True).encode(
-        x=alt.X('hour:O'),
-        y=alt.Y('Percentage:Q'),
-        color=alt.Color('Plan:N'),
-    ).interactive()
-    
-    # Layer Deflected chart
-    deflected_chart = alt.layer(deflected_ci_area, deflected_lines).properties(
+    # --- Chart 3: Deflected Rate ---
+    # --- FIX: Filter the base charts using transform_filter BEFORE layering ---
+    deflected_chart = alt.layer(
+        kpi_ci_area.transform_filter(alt.datum.KPI == 'Deflected Rate'), 
+        kpi_base_chart.transform_filter(alt.datum.KPI == 'Deflected Rate')
+    ).properties(
         title='Deflection Rate with 95% Confidence Interval'
-    ).resolve_scale(
-        y='shared'
+    ).resolve_scale(y='shared').encode(
+        x=alt.X('hour:O', title='Hour of Day'),
+        y=alt.Y('Percentage:Q', title='Deflected Rate (%)', scale=alt.Scale(padding=0.2))
     )
-
 
     # Combine the three charts vertically
     final_kpi_chart = alt.vconcat(
