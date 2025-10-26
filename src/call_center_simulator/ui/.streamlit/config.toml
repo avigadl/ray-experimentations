@@ -1,0 +1,8 @@
+# .streamlit/config.toml
+
+[theme]
+primaryColor="#0070D2"         # Salesforce Blue for primary elements (buttons, sliders)
+backgroundColor="#F3F6F9"      # Light gray for the main page background
+secondaryBackgroundColor="#FFFFFF" # White for sidebars, expanders, and containers
+textColor="#212121"            # Dark gray for main text for readability
+font="sans serif"
