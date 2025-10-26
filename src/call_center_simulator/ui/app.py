@@ -58,8 +58,8 @@ class TargetKPIs:
     utilization_target: float = 75.0
 
 
-# Hourly call arrival patterns
-HOURLY_CALL_RATES = {
+# Default hourly call arrival patterns
+DEFAULT_HOURLY_CALL_RATES = {
     0: 30, 1: 20, 2: 10, 3: 10, 4: 15, 5: 30, 6: 60, 7: 120,
     8: 250, 9: 300, 10: 280, 11: 200, 12: 180, 13: 200, 14: 220,
     15: 250, 16: 280, 17: 200, 18: 150, 19: 100, 20: 80, 21: 60,
@@ -296,9 +296,9 @@ class CallGenerator:
 class SimulationRunner:
     """Orchestrates simulation execution"""
     
-    def __init__(self, config: SimulationConfig):
+    def __init__(self, config: SimulationConfig, hourly_rates: Dict[int, int]):
         self.config = config
-        self.arrival_model = CallArrivalModel(HOURLY_CALL_RATES)
+        self.arrival_model = CallArrivalModel(hourly_rates)
         self.duration_model = CallDurationModel(config.avg_call_duration)
     
     def run_single_replica(self, num_agents: int, sim_duration: float,
@@ -334,11 +334,12 @@ class SimulationRunner:
 class StaffingOptimizer:
     """Finds optimal staffing levels"""
     
-    def __init__(self, config: SimulationConfig, targets: TargetKPIs):
+    def __init__(self, config: SimulationConfig, targets: TargetKPIs, hourly_rates: Dict[int, int]):
         self.config = config
         self.targets = targets
-        self.runner = SimulationRunner(config)
-        self.arrival_model = CallArrivalModel(HOURLY_CALL_RATES)
+        self.hourly_rates = hourly_rates  # <-- Store the rates
+        self.runner = SimulationRunner(config, self.hourly_rates) # <-- Pass to runner
+        self.arrival_model = CallArrivalModel(self.hourly_rates) # <-- Pass to arrival model
     
     def evaluate_staffing_level(self, hour: int, num_agents: int,
                                use_agentforce: bool = False) -> Tuple[float, float, int, float, float, int, bool]:
@@ -414,7 +415,8 @@ class StaffingOptimizer:
         """Find optimal staffing plan for all 24 hours"""
         results = []
         
-        for hour in range(24):
+        # Use self.hourly_rates.keys() in case the CSV is not 0-23
+        for hour in sorted(self.hourly_rates.keys()):
             optimal_n, stats = self.find_optimal_for_hour(hour, use_agentforce)
             constrained_n = min(optimal_n, self.config.agent_cap) if optimal_n else None
             
@@ -429,7 +431,7 @@ class StaffingOptimizer:
                 'hour': hour,
                 'optimal_n': optimal_n,
                 'constrained_n': constrained_n,
-                'call_rate': HOURLY_CALL_RATES[hour],
+                'call_rate': self.hourly_rates[hour], # <-- Use self.hourly_rates
                 'sla': s,
                 'sla_std': s_std,
                 'sla_n': s_n,
@@ -439,7 +441,7 @@ class StaffingOptimizer:
             })
             
             if progress_callback:
-                progress_callback(hour + 1)  # Report progress (hour 1 to 24)
+                progress_callback(hour + 1)  # Report progress
         
         return pd.DataFrame(results).set_index('hour')
 
@@ -449,12 +451,14 @@ class StaffingOptimizer:
 # =============================================================================
 
 @st.cache_data  # <-- Cache the results of this expensive function
-def run_optimization(config: SimulationConfig, targets: TargetKPIs) -> Tuple[pd.DataFrame, Dict[str, float]]:
+def run_optimization(config: SimulationConfig, targets: TargetKPIs, 
+                     call_rates: Dict[int, int]) -> Tuple[pd.DataFrame, Dict[str, float]]:
     """
     Refactored main function to run optimization and return results.
     """
     random.seed(config.random_seed)
-    optimizer = StaffingOptimizer(config, targets)
+    # Pass the call_rates to the optimizer
+    optimizer = StaffingOptimizer(config, targets, call_rates)
     summary = {}
     
     # This status box will contain the progress bar
@@ -507,13 +511,13 @@ def run_optimization(config: SimulationConfig, targets: TargetKPIs) -> Tuple[pd.
             'optimal_n': 'optimal_agentforce',
             'constrained_n': 'constrained_agentforce',
             'sla': 'sla_agentforce',
-            'sla_std': 'sla_std_agentforce',  # <-- THE FIX IS HERE
+            'sla_std': 'sla_std_agentforce',
             'sla_n': 'sla_n_agentforce',
             'abandon': 'abandon_agentforce',
             'abandon_std': 'abandon_std_agentforce',
             'abandon_n': 'abandon_n_agentforce'
         })
-
+        
         # Define the specific columns to join from the agentforce plan
         # This avoids the 'call_rate' conflict
         agentforce_cols_to_join = [
@@ -526,7 +530,19 @@ def run_optimization(config: SimulationConfig, targets: TargetKPIs) -> Tuple[pd.
         combined = baseline_plan.join(agentforce_plan[agentforce_cols_to_join])
         
         
-        # Calculate savings
+        # --- NEW: Calculate Weighted Average KPIs ---
+        total_calls = combined['call_rate'].sum()
+        
+        if total_calls > 0:
+            avg_sla_baseline = (combined['sla_baseline'] * combined['call_rate']).sum() / total_calls
+            avg_abandon_baseline = (combined['abandon_baseline'] * combined['call_rate']).sum() / total_calls
+            avg_sla_agentforce = (combined['sla_agentforce'] * combined['call_rate']).sum() / total_calls
+            avg_abandon_agentforce = (combined['abandon_agentforce'] * combined['call_rate']).sum() / total_calls
+        else:
+            avg_sla_baseline, avg_abandon_baseline, avg_sla_agentforce, avg_abandon_agentforce = (np.nan, np.nan, np.nan, np.nan)
+        
+        
+        # --- Calculate Staffing Savings ---
         baseline_total = combined['constrained_baseline'].sum()
         agentforce_total = combined['constrained_agentforce'].sum()
         savings = baseline_total - agentforce_total
@@ -536,21 +552,33 @@ def run_optimization(config: SimulationConfig, targets: TargetKPIs) -> Tuple[pd.
             "baseline_total": baseline_total,
             "agentforce_total": agentforce_total,
             "savings": savings,
-            "savings_pct": savings_pct
+            "savings_pct": savings_pct,
+            # NEW: Add KPI averages to summary
+            "avg_sla_baseline": avg_sla_baseline,
+            "avg_sla_agentforce": avg_sla_agentforce,
+            "avg_abandon_baseline": avg_abandon_baseline,
+            "avg_abandon_agentforce": avg_abandon_agentforce
         }
     
     return combined, summary
-
 
 # =============================================================================
 # STREAMLIT UI
 # =============================================================================
 
 st.set_page_config(layout="wide")
-st.title("🎛️ Contact Center Staffing Optimizer")
+st.title("Contact Center Staffing Optimizer")
 st.markdown("Compare baseline staffing vs. Agentforce-enabled staffing plans.")
 
 # --- Sidebar for Inputs ---
+
+with st.sidebar.expander("📞 Call Volume", expanded=True):
+    uploaded_file = st.file_uploader(
+        "Upload Custom Call Volume (CSV)", 
+        type="csv",
+        help="CSV must have 'hour' (0-23) and 'calls' columns."
+    )
+
 st.sidebar.header("Simulation Parameters")
 
 # Group parameters using st.expander
@@ -569,13 +597,14 @@ with st.sidebar.expander("Agentforce Config", expanded=True):
                           help="Percent of eligible calls that Agentforce successfully handles.")
 
 with st.sidebar.expander("Simulation Engine", expanded=True):
-    p_reps = st.number_input("Replications per Hour", 10, 1000, 10, 10,
+    p_reps = st.number_input("Replications per Hour", 10, 5000, 10, 10,
                              help="Number of simulations to run for each hour to find stable results. Higher is slower but more accurate.")
     p_agent_cap = st.number_input("Agent Cap (per hour)", 10, 50, 18, 1,
                                  help="Maximum number of agents allowed to be scheduled in any given hour.")
     p_min_agents = st.number_input("Min Agents (for search)", 1, 10, 1, 1)
     p_max_agents = st.number_input("Max Agents (for search)", 20, 100, 30, 1)
     p_seed = st.number_input("Random Seed", 1, 100, 42, 1)
+
 
 st.sidebar.header("Target KPIs")
 p_sla_target = st.slider("SLA Target (%)", 50.0, 100.0, 80.0, 1.0,
@@ -595,20 +624,38 @@ config = SimulationConfig(
     agent_cap=p_agent_cap,
     min_agents=p_min_agents,
     max_agents=p_max_agents,
-    sim_duration_per_hour=3600,  # Hardcoded as in original
-    evaluation_hours=25         # Hardcoded as in original
+    sim_duration_per_hour=3600,
+    evaluation_hours=25
 )
 targets = TargetKPIs(
     sla_target=p_sla_target,
     abandon_target=p_abandon_target,
-    utilization_target=75.0     # Hardcoded as in original
+    utilization_target=75.0
 )
 
+# --- Load Call Rates ---
+call_rates_dict = DEFAULT_HOURLY_CALL_RATES
+if uploaded_file is not None:
+    try:
+        df = pd.read_csv(uploaded_file)
+        # Validate columns
+        if 'hour' in df.columns and 'calls' in df.columns:
+            # Convert to dictionary {0: 30, 1: 20, ...}
+            call_rates_dict = df.set_index('hour')['calls'].to_dict()
+            st.sidebar.success(f"Loaded {len(call_rates_dict)} hourly call rates.")
+        else:
+            st.sidebar.error("CSV must have 'hour' and 'calls' columns.")
+            uploaded_file = None # Revert to default
+    except Exception as e:
+        st.sidebar.error(f"Error loading file: {e}")
+        uploaded_file = None # Revert to default
+
 # --- Main Page Body ---
-if st.button("🚀 Run Optimization", type="primary"):
+if st.button("Run Optimization", type="primary"):
     # Call the refactored, cached function
-    combined_df, summary = run_optimization(config, targets)
-    
+    # We now pass the call_rates_dict to the simulation
+    combined_df, summary = run_optimization(config, targets, call_rates_dict)
+        
     st.header("KPI Summary")
     col1, col2, col3 = st.columns(3)
     col1.metric("Baseline Agent-Hours", f"{summary['baseline_total']:.0f}")
@@ -686,6 +733,46 @@ if st.button("🚀 Run Optimization", type="primary"):
     st.altair_chart(final_chart, use_container_width=True)
 
     st.header("Hourly KPI Comparison (SLA & Abandon Rate)")
+    
+    # --- NEW: Add KPI Summary Cards ---
+    st.subheader("Overall KPI Performance (Weighted by Call Volume)")
+    
+    col1, col2 = st.columns(2)
+    
+    # --- SLA Card ---
+    with col1:
+        # Use markdown with inline HTML/CSS for a custom "card"
+        st.markdown(
+            f"""
+            <div style="background-color: #F3F6F9; border: 1px solid #E0E5EB; border-radius: 5px; padding: 20px; height: 100%;">
+            <h5 style="color: #0070D2; margin-top: 0;">Service Level (SLA)</h5>
+            <p style="font-size: 1.1em; line-height: 1.6;">
+            With <b>Agentforce</b>, your weighted average SLA is <b>{summary['avg_sla_agentforce']:.1f}%</b>.
+            <br>
+            Without it, your SLA would be <b>{summary['avg_sla_baseline']:.1f}%</b>.
+            </p>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    
+    # --- Abandon Rate Card ---
+    with col2:
+        st.markdown(
+            f"""
+            <div style="background-color: #F3F6F9; border: 1px solid #E0E5EB; border-radius: 5px; padding: 20px; height: 100%;">
+            <h5 style="color: #0070D2; margin-top: 0;">Abandon Rate</h5>
+            <p style="font-size: 1.1em; line-height: 1.6;">
+            With <b>Agentforce</b>, your weighted average abandon rate is <b>{summary['avg_abandon_agentforce']:.1f}%</b>.
+            <br>
+            Without it, your abandon rate would be <b>{summary['avg_abandon_baseline']:.1f}%</b>.
+            </p>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    st.markdown("<br>", unsafe_allow_html=True) # Add some spacing
 
     # --- Prepare data for KPI chart ---
     
