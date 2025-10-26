@@ -617,6 +617,15 @@ with st.sidebar.expander("📞 Call Volume", expanded=True):
         help="CSV must have 'hour' (0-23) and 'calls' columns."
     )
 
+# --- NEW: Wrapped in an expander ---
+with st.sidebar.expander("Target KPIs", expanded=True):
+    p_sla_target = st.slider("SLA Target (%)", 50.0, 100.0, 80.0, 1.0,
+                             help="Target percentage of calls answered within the SLA threshold.")
+    p_abandon_target = st.slider("Abandon Target (%)", 1.0, 20.0, 5.0, 0.5,
+                                 help="Target maximum percentage of calls that abandon.")
+# --- END NEW EXPANDER ---
+
+
 st.sidebar.header("Simulation Parameters")
 
 # Group parameters using st.expander
@@ -642,13 +651,6 @@ with st.sidebar.expander("Simulation Engine", expanded=True):
     p_min_agents = st.number_input("Min Agents (for search)", 1, 10, 1, 1)
     p_max_agents = st.number_input("Max Agents (for search)", 20, 100, 30, 1)
     p_seed = st.number_input("Random Seed", 1, 100, 42, 1)
-
-
-st.sidebar.header("Target KPIs")
-p_sla_target = st.slider("SLA Target (%)", 50.0, 100.0, 80.0, 1.0,
-                         help="Target percentage of calls answered within the SLA threshold.")
-p_abandon_target = st.slider("Abandon Target (%)", 1.0, 20.0, 5.0, 0.5,
-                             help="Target maximum percentage of calls that abandon.")
 
 # --- Create Config Objects from UI inputs ---
 config = SimulationConfig(
@@ -822,7 +824,7 @@ if st.button("Run Optimization", type="primary"):
             <div style="background-color: #F3F6F9; border: 1px solid #E0E5EB; border-radius: 5px; padding: 20px; height: 100%;">
             <h5 style="color: #0070D2; margin-top: 0;">Service Level (SLA)</h5>
             <p style="font-size: 1.1em; line-height: 1.6;">
-            With <b>Agentforce</b>, your weighted average SLA is 
+            With <b>Agentforce</b>, your SLA is 
             <b>{summary['avg_sla_agentforce']:.1f}%</b>
             <span style="{green_box_style}">+{summary['sla_improvement_pp']:.1f} p.p.</span>
             <br>
@@ -844,7 +846,7 @@ if st.button("Run Optimization", type="primary"):
             <div style="background-color: #F3F6F9; border: 1px solid #E0E5EB; border-radius: 5px; padding: 20px; height: 100%;">
             <h5 style="color: #0070D2; margin-top: 0;">Abandon Rate</h5>
             <p style="font-size: 1.1em; line-height: 1.6;">
-            With <b>Agentforce</b>, your weighted average abandon rate is 
+            With <b>Agentforce</b>, your abandon rate is 
             <b>{summary['avg_abandon_agentforce']:.1f}%</b>
             <span style="{abandon_delta_style}">{abandon_delta_prefix}{abs(summary['abandon_reduction_pp']):.1f} p.p.</span>
             <br>
