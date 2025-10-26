@@ -704,8 +704,17 @@ if st.button("Run Optimization", type="primary"):
                  delta=f"{summary['savings']:.0f} hours saved",
                  delta_color="normal")
     # Add the new Deflection Rate metric
-    col4.metric("Deflection Rate", f"{summary['avg_deflected_rate_agentforce']:.1f}%",
-                 help="Weighted avg. % of total calls handled by Agentforce.")
+    
+    # NEW: Calculate Deflection Rate pp difference
+    deflection_improvement_pp = summary['avg_deflected_rate_agentforce'] - summary['avg_deflected_rate_baseline']
+
+    col4.metric(
+        "Deflection Rate", 
+        f"{summary['avg_deflected_rate_agentforce']:.1f}%",
+        delta=f"{deflection_improvement_pp:.1f} p.p.", # Always positive or zero
+        delta_color="normal", # Neutral color as this is generally an improvement
+        help="Weighted avg. % of total calls handled by Agentforce."
+    )
     
     st.header("Hourly Staffing Plan Comparison")
     
@@ -714,6 +723,8 @@ if st.button("Run Optimization", type="primary"):
 
     # Define the green box style (used for this card and the KPI cards below)
     green_box_style = "background-color: #D4EDDA; color: #155724; border: 1px solid #C3E6CB; border-radius: 4px; padding: 2px 6px; font-weight: bold; font-size: 0.9em; margin-left: 10px;"
+    red_box_style = "background-color: #F8D7DA; color: #721C24; border: 1px solid #F5C6CB; border-radius: 4px; padding: 2px 6px; font-weight: bold; font-size: 0.9em; margin-left: 10px;"
+
 
     st.markdown(
         f"""
@@ -824,6 +835,10 @@ if st.button("Run Optimization", type="primary"):
     
     # --- Abandon Rate Card ---
     with col2:
+        # Determine the style based on whether abandon rate improved or worsened
+        abandon_delta_style = green_box_style if summary['abandon_reduction_pp'] >= 0 else red_box_style
+        abandon_delta_prefix = "-" if summary['abandon_reduction_pp'] >= 0 else "+" # Lower is good, so '-' means reduction
+        
         st.markdown(
             f"""
             <div style="background-color: #F3F6F9; border: 1px solid #E0E5EB; border-radius: 5px; padding: 20px; height: 100%;">
@@ -831,7 +846,7 @@ if st.button("Run Optimization", type="primary"):
             <p style="font-size: 1.1em; line-height: 1.6;">
             With <b>Agentforce</b>, your weighted average abandon rate is 
             <b>{summary['avg_abandon_agentforce']:.1f}%</b>
-            <span style="{green_box_style}">-{summary['abandon_reduction_pp']:.1f} p.p.</span>
+            <span style="{abandon_delta_style}">{abandon_delta_prefix}{abs(summary['abandon_reduction_pp']):.1f} p.p.</span>
             <br>
             Without it, your abandon rate would be <b>{summary['avg_abandon_baseline']:.1f}%</b>.
             </p>
@@ -1007,7 +1022,7 @@ if st.button("Run Optimization", type="primary"):
     final_kpi_chart = alt.vconcat(
         sla_chart, 
         abandon_chart,
-        deflected_chart # <-- NEW
+        deflected_chart
     ).resolve_scale(
         y='independent' # Each chart gets its own y-axis scale
     )
