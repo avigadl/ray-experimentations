@@ -715,16 +715,19 @@ if st.session_state.run_optimizations_clicked and st.session_state.simulation_st
     st.session_state.summary = summary
     st.session_state.simulation_stage = 'optimizations_run'
 
-# --- Display Area ---
+# --- Display Area (adapts based on session state) ---
+# Ensure results_df and summary are loaded before trying to display
 if st.session_state.results_df is not None and st.session_state.summary is not None:
     display_df = st.session_state.results_df
     display_summary = st.session_state.summary
     stage = st.session_state.simulation_stage
     optimizations_run = (stage == 'optimizations_run')
+    # Check if agentforce results actually exist in the summary before trying to use them
     agentforce_run = optimizations_run and 'optimal_agentforce_total' in display_summary
 
     st.header("KPI Summary")
     
+    # Adjust columns based on stage
     if optimizations_run:
         cols = st.columns(4) if agentforce_run else st.columns(3)
         cols[0].metric("Baseline Plan Hours", f"{display_summary.get('baseline_total', 0):.0f}")
@@ -732,40 +735,56 @@ if st.session_state.results_df is not None and st.session_state.summary is not N
         if agentforce_run:
             cols[2].metric("Optimal Agentforce Hours", f"{display_summary.get('optimal_agentforce_total', 0):.0f}")
             deflection_pp = display_summary.get('deflection_improvement_pp', 0.0)
-            cols[3].metric("Agentforce Deflection", f"{display_summary.get('avg_deflected_rate_optimal_agentforce', 'N/A'):.1f}%", delta=f"{deflection_pp:.1f} p.p.", delta_color="normal", help="Weighted avg. % of calls handled by Agentforce vs. Baseline Plan.")
+            cols[3].metric("Agentforce Deflection", 
+                           f"{display_summary.get('avg_deflected_rate_optimal_agentforce', 'N/A'):.1f}%",
+                           delta=f"{deflection_pp:.1f} p.p.", delta_color="normal",
+                           help="Weighted avg. % of calls handled by Agentforce vs. Baseline Plan.")
         else:
              deflection_pp_l1 = display_summary.get('avg_deflected_rate_optimal_baseline', 0.0) - display_summary.get('avg_deflected_rate_baseline', 0.0)
-             cols[2].metric("Deflection (Optimal Baseline)", f"{display_summary.get('avg_deflected_rate_optimal_baseline', 'N/A'):.1f}%", delta=f"{deflection_pp_l1:.1f} p.p.", delta_color="normal", help="Weighted avg. % of calls deflected in Optimal Baseline vs Baseline Plan.")
-    else: 
+             cols[2].metric("Deflection (Optimal Baseline)", 
+                            f"{display_summary.get('avg_deflected_rate_optimal_baseline', 'N/A'):.1f}%",
+                            delta=f"{deflection_pp_l1:.1f} p.p.", delta_color="normal",
+                            help="Weighted avg. % of calls deflected in Optimal Baseline vs Baseline Plan.")
+    else: # Only baseline evaluated
         cols = st.columns(1)
         cols[0].metric("Baseline Plan Hours", f"{display_summary.get('baseline_total', 0):.0f}")
 
     st.header("Hourly Staffing Plan Comparison")
 
+    # Define Box Styles
     green_box_style = "background-color: #D4EDDA; color: #155724; border: 1px solid #C3E6CB; border-radius: 4px; padding: 2px 6px; font-weight: bold; font-size: 0.9em; margin-left: 10px;"
     red_box_style = "background-color: #F8D7DA; color: #721C24; border: 1px solid #F5C6CB; border-radius: 4px; padding: 2px 6px; font-weight: bold; font-size: 0.9em; margin-left: 10px;"
 
+    # Show savings cards only after optimizations run
     if optimizations_run:
         st.subheader("Overall Staffing Impact (vs. Baseline Plan)")
         card_cols = st.columns(2) if agentforce_run else st.columns(1)
+
         with card_cols[0]:
+             # --- CORRECTED LOGIC FOR L1 PEAK SAVINGS ---
              peak_l1_saving = display_summary.get('l1_peak_savings', 0.0)
-             peak_l1_style = green_box_style if peak_l1_saving >= 0 else red_box_style
+             peak_l1_style = green_box_style if peak_l1_saving >= 0 else red_box_style # Style based on saving sign
              peak_l1_text = f"reduces peak staffing by <b>{peak_l1_saving:.0f} agents</b>" if peak_l1_saving >= 0 else f"<b>increases peak staffing by {abs(peak_l1_saving):.0f} agents</b>"
+             
              hour_l1_saving = display_summary.get('l1_savings_hours', 0.0)
              hour_l1_style = green_box_style if hour_l1_saving >= 0 else red_box_style
              hour_l1_text = f"saves <b>{hour_l1_saving:.0f} agent-hours</b>" if hour_l1_saving >=0 else f"costs <b>{abs(hour_l1_saving):.0f} extra agent-hours</b>"
              hour_l1_pct_text = f"{abs(display_summary.get('l1_savings_pct', 0.0)):.1f}% {'reduction' if hour_l1_saving >=0 else 'increase'}"
+
              st.markdown(f"""<div style="background-color: #F3F6F9; border: 1px solid #E0E5EB; border-radius: 5px; padding: 20px; height: 100%;"><h5 style="color: #0070D2; margin-top: 0;">Level 1: Staffing Optimization Savings</h5><p style="font-size: 1.1em; line-height: 1.6;">Optimizing the <b>Baseline Plan</b> (uncapped) {peak_l1_text} (from {display_summary.get('peak_baseline', 0):.0f} to {display_summary.get('peak_optimal_baseline', 0):.0f}).<br>This {hour_l1_text}<span style="{hour_l1_style}">{hour_l1_pct_text}</span></p></div>""", unsafe_allow_html=True)
+
         if agentforce_run and len(card_cols) > 1:
             with card_cols[1]:
+                 # --- CORRECTED LOGIC FOR L2 PEAK SAVINGS ---
                  peak_l2_saving = display_summary.get('l2_peak_savings', 0.0)
-                 peak_l2_style = green_box_style if peak_l2_saving >= 0 else red_box_style
+                 peak_l2_style = green_box_style if peak_l2_saving >= 0 else red_box_style # Style based on saving sign
                  peak_l2_text = f"further reduces peak staffing by <b>{peak_l2_saving:.0f} agents</b> vs Baseline" if peak_l2_saving >= 0 else f"<b>increases peak staffing by {abs(peak_l2_saving):.0f} agents</b> vs Baseline"
+                 
                  hour_l2_saving = display_summary.get('l2_savings_hours', 0.0)
                  hour_l2_style = green_box_style if hour_l2_saving >= 0 else red_box_style
                  hour_l2_text = f"Total savings vs Baseline: <b>{hour_l2_saving:.0f} agent-hours</b>" if hour_l2_saving >=0 else f"Total cost vs Baseline: <b>{abs(hour_l2_saving):.0f} extra agent-hours</b>"
                  hour_l2_pct_text = f"{abs(display_summary.get('l2_savings_pct', 0.0)):.1f}% total {'reduction' if hour_l2_saving >=0 else 'increase'}"
+                 
                  st.markdown(f"""<div style="background-color: #F3F6F9; border: 1px solid #E0E5EB; border-radius: 5px; padding: 20px; height: 100%;"><h5 style="color: #0070D2; margin-top: 0;">Level 2: Agentforce Optimization Savings</h5><p style="font-size: 1.1em; line-height: 1.6;">Adding <b>Agentforce</b> (uncapped) {peak_l2_text} (from {display_summary.get('peak_baseline', 0):.0f} to {display_summary.get('peak_optimal_agentforce', 0):.0f}).<br>{hour_l2_text}<span style="{hour_l2_style}">{hour_l2_pct_text}</span></p></div>""", unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
 
@@ -788,67 +807,46 @@ if st.session_state.results_df is not None and st.session_state.summary is not N
     final_chart = alt.layer(call_rate_bars, required_agents_lines).resolve_scale(y='independent').properties(title="Hourly Staffing vs. Call Volume").configure_axis(grid=False).configure_view(strokeWidth=0)
     st.altair_chart(final_chart, use_container_width=True)
 
+
     st.header("Hourly KPI Comparison")
 
-    # --- KPI Summary Cards ---
-    if optimizations_run: # Show detailed KPI cards only after optimization
+    if optimizations_run: 
         st.subheader("Overall KPI Performance (Weighted by Call Volume)")
         kpi_card_cols = st.columns(2)
-
         with kpi_card_cols[0]:
             sla_l1_pp = display_summary.get('avg_sla_optimal_baseline', np.nan) - display_summary.get('avg_sla_baseline', np.nan)
             sla_l1_style = green_box_style if sla_l1_pp >= 0 else red_box_style
             sla_l1_prefix = "+" if sla_l1_pp >=0 else ""
-            
             sla_text = f"""<p style="font-size: 1.1em; line-height: 1.6;"><b>Baseline Plan:</b> {display_summary.get('avg_sla_baseline', 'N/A'):.1f}%<br><b>Optimal Baseline:</b> {display_summary.get('avg_sla_optimal_baseline', 'N/A'):.1f}% <span style="{sla_l1_style}">{sla_l1_prefix}{sla_l1_pp:.1f} p.p.</span>"""
-            
             if agentforce_run:
-                sla_l2_pp = display_summary.get('sla_improvement_pp', 0.0) # vs Baseline Plan
+                sla_l2_pp = display_summary.get('sla_improvement_pp', 0.0) 
                 sla_l2_style = green_box_style if sla_l2_pp >= 0 else red_box_style
                 sla_l2_prefix = "+" if sla_l2_pp >=0 else ""
                 sla_text += f"""<br><b>Optimal Agentforce:</b> {display_summary.get('avg_sla_optimal_agentforce', 'N/A'):.1f}% <span style="{sla_l2_style}">{sla_l2_prefix}{sla_l2_pp:.1f} p.p. vs Baseline</span>"""
             sla_text += "</p>"
-                
             st.markdown(f"""<div style="background-color: #F3F6F9; border: 1px solid #E0E5EB; border-radius: 5px; padding: 20px; height: 100%;"><h5 style="color: #0070D2; margin-top: 0;">Service Level (SLA)</h5>{sla_text}</div>""", unsafe_allow_html=True)
-
         with kpi_card_cols[1]:
             abandon_l1_pp_reduction = display_summary.get('avg_abandon_baseline', np.nan) - display_summary.get('avg_abandon_optimal_baseline', np.nan)
             abandon_l1_style = green_box_style if abandon_l1_pp_reduction >= 0 else red_box_style
             abandon_l1_prefix = "-" if abandon_l1_pp_reduction >= 0 else "+"
-
             abandon_text = f"""<p style="font-size: 1.1em; line-height: 1.6;"><b>Baseline Plan:</b> {display_summary.get('avg_abandon_baseline', 'N/A'):.1f}%<br><b>Optimal Baseline:</b> {display_summary.get('avg_abandon_optimal_baseline', 'N/A'):.1f}% <span style="{abandon_l1_style}">{abandon_l1_prefix}{abs(abandon_l1_pp_reduction):.1f} p.p.</span>"""
-
             if agentforce_run:
-                abandon_l2_pp_reduction = display_summary.get('abandon_reduction_pp', 0.0) # vs Baseline Plan
+                abandon_l2_pp_reduction = display_summary.get('abandon_reduction_pp', 0.0) 
                 abandon_l2_style = green_box_style if abandon_l2_pp_reduction >= 0 else red_box_style
                 abandon_l2_prefix = "-" if abandon_l2_pp_reduction >= 0 else "+"
                 abandon_text += f"""<br><b>Optimal Agentforce:</b> {display_summary.get('avg_abandon_optimal_agentforce', 'N/A'):.1f}% <span style="{abandon_l2_style}">{abandon_l2_prefix}{abs(abandon_l2_pp_reduction):.1f} p.p. vs Baseline</span>"""
             abandon_text += "</p>"
-
             st.markdown(f"""<div style="background-color: #F3F6F9; border: 1px solid #E0E5EB; border-radius: 5px; padding: 20px; height: 100%;"><h5 style="color: #0070D2; margin-top: 0;">Abandon Rate</h5>{abandon_text}</div>""", unsafe_allow_html=True)
-                
         st.markdown("<br>", unsafe_allow_html=True)
-
 
     # --- Prepare data for KPI chart ---
     df_chart = display_df.reset_index()
-    
-    stubnames_kpi = [
-        'sla', 'sla_std', 'sla_n', 
-        'abandon', 'abandon_std', 'abandon_n', 
-        'deflected_rate', 'deflected_rate_std', 'deflected_rate_n'
-    ]
-    
+    stubnames_kpi = ['sla', 'sla_std', 'sla_n', 'abandon', 'abandon_std', 'abandon_n', 'deflected_rate', 'deflected_rate_std', 'deflected_rate_n']
     if stage == 'baseline_evaluated': suffix_kpi, plans_in_data = '(baseline)', ['baseline']
     elif agentforce_run: suffix_kpi, plans_in_data = '(baseline|optimal_baseline|optimal_agentforce)', ['baseline', 'optimal_baseline', 'optimal_agentforce']
     else: suffix_kpi, plans_in_data = '(baseline|optimal_baseline)', ['baseline', 'optimal_baseline']
-
-    df_long_kpi = pd.wide_to_long(df_chart, 
-                         stubnames=stubnames_kpi,
-                         i='hour', 
-                         j='Plan', 
-                         sep='_', 
-                         suffix=suffix_kpi).reset_index()
+    
+    df_long_kpi = pd.wide_to_long(df_chart, stubnames=stubnames_kpi, i='hour', j='Plan', sep='_', suffix=suffix_kpi).reset_index()
 
     kpi_dfs = []
     for kpi in ['sla', 'abandon', 'deflected_rate']:
@@ -872,88 +870,30 @@ if st.session_state.results_df is not None and st.session_state.summary is not N
     if optimizations_run: kpi_domain.append('optimal_baseline'); kpi_range.append(salesforce_gray); kpi_labels['optimal_baseline'] = 'Optimal Baseline'
     if agentforce_run: kpi_domain.append('optimal_agentforce'); kpi_range.append(salesforce_blue); kpi_labels['optimal_agentforce'] = 'Optimal Agentforce'
 
-    # --- Base Chart Definitions (using full kpi_data) ---
     if not kpi_data.empty:
-        # Base chart for the mean line
-        kpi_base_chart = alt.Chart(kpi_data).mark_line(point=True).encode(
-            x=alt.X('hour:O'),
-            y=alt.Y('Percentage:Q'),
-            color=alt.Color('Plan:N', scale=alt.Scale(domain=kpi_domain, range=kpi_range), legend=alt.Legend(title="Plan", orient="bottom", labelExpr=f"{kpi_labels}[datum.label]")),
-            tooltip=[ alt.Tooltip('hour:O'), alt.Tooltip('Plan:N', title='Plan'), alt.Tooltip('Percentage:Q', format='.1f', title='Mean'), alt.Tooltip('CI_Lower:Q', format='.1f', title='95% CI Lower'), alt.Tooltip('CI_Upper:Q', format='.1f', title='95% CI Upper')]
-        )
-
-        # Base chart for the confidence interval area
-        kpi_ci_area = alt.Chart(kpi_data).mark_area(opacity=0.3).encode(
-            x=alt.X('hour:O'), 
-            y=alt.Y('CI_Lower:Q'), 
-            y2=alt.Y2('CI_Upper:Q'), 
-            color=alt.Color('Plan:N', legend=None) # Color CI by plan, hide legend
-        )
+        kpi_base_chart = alt.Chart(kpi_data).mark_line(point=True).encode(x=alt.X('hour:O'), y=alt.Y('Percentage:Q'), color=alt.Color('Plan:N', scale=alt.Scale(domain=kpi_domain, range=kpi_range), legend=alt.Legend(title="Plan", orient="bottom", labelExpr=f"{kpi_labels}[datum.label]")), tooltip=[ alt.Tooltip('hour:O'), alt.Tooltip('Plan:N', title='Plan'), alt.Tooltip('Percentage:Q', format='.1f', title='Mean'), alt.Tooltip('CI_Lower:Q', format='.1f', title='95% CI Lower'), alt.Tooltip('CI_Upper:Q', format='.1f', title='95% CI Upper')])
+        kpi_ci_area = alt.Chart(kpi_data).mark_area(opacity=0.3).encode(x=alt.X('hour:O'), y=alt.Y('CI_Lower:Q'), y2=alt.Y2('CI_Upper:Q'), color=alt.Color('Plan:N', legend=None))
 
         # --- Chart 1: SLA ---
-        # Define target line separately using datum
-        sla_target_line = alt.Chart().mark_rule(color='green', strokeDash=[5,5], size=2).encode(
-            y=alt.Y(datum=targets.sla_target), 
-            tooltip=alt.value(f'SLA Target: {targets.sla_target}%')
-        )
-        # Layer using filtered base charts and the separate rule
-        sla_chart = alt.layer(
-            kpi_ci_area.transform_filter(alt.datum.KPI == 'SLA'), 
-            kpi_base_chart.transform_filter(alt.datum.KPI == 'SLA'), 
-            sla_target_line
-        ).properties(
-            title='Service Level Agreement (SLA) with 95% Confidence Interval'
-        ).resolve_scale(y='shared').encode(
-            x=alt.X('hour:O', title=None, axis=None), 
-            y=alt.Y('Percentage:Q', title='SLA (%)', scale=alt.Scale(padding=0.2))
-        )
+        sla_target_line = alt.Chart().mark_rule(color='green', strokeDash=[5,5], size=2).encode(y=alt.Y(datum=targets.sla_target), tooltip=alt.value(f'SLA Target: {targets.sla_target}%')).properties(title="SLA Target")
+        sla_chart = alt.layer(kpi_ci_area.transform_filter(alt.datum.KPI == 'SLA'), kpi_base_chart.transform_filter(alt.datum.KPI == 'SLA'), sla_target_line).properties(title='Service Level Agreement (SLA) with 95% Confidence Interval').resolve_scale(y='shared').encode(x=alt.X('hour:O', title=None, axis=None), y=alt.Y('Percentage:Q', title='SLA (%)', scale=alt.Scale(padding=0.2)))
 
         # --- Chart 2: Abandon Rate ---
-         # Define target line separately using datum
-        abandon_target_line = alt.Chart().mark_rule(color='red', strokeDash=[5,5], size=2).encode(
-            y=alt.Y(datum=targets.abandon_target), 
-            tooltip=alt.value(f'Abandon Target: {targets.abandon_target}%')
-        )
-        # Layer using filtered base charts and the separate rule
-        abandon_chart = alt.layer(
-            kpi_ci_area.transform_filter(alt.datum.KPI == 'Abandon'), 
-            kpi_base_chart.transform_filter(alt.datum.KPI == 'Abandon'), 
-            abandon_target_line
-        ).properties(
-            title='Abandon Rate with 95% Confidence Interval'
-        ).resolve_scale(y='shared').encode(
-            x=alt.X('hour:O', title=None, axis=None), 
-            y=alt.Y('Percentage:Q', title='Abandon Rate (%)', scale=alt.Scale(padding=0.2))
-        )
+        abandon_target_line = alt.Chart().mark_rule(color='red', strokeDash=[5,5], size=2).encode(y=alt.Y(datum=targets.abandon_target), tooltip=alt.value(f'Abandon Target: {targets.abandon_target}%')).properties(title="Abandon Target")
+        abandon_chart = alt.layer(kpi_ci_area.transform_filter(alt.datum.KPI == 'Abandon'), kpi_base_chart.transform_filter(alt.datum.KPI == 'Abandon'), abandon_target_line).properties(title='Abandon Rate with 95% Confidence Interval').resolve_scale(y='shared').encode(x=alt.X('hour:O', title=None, axis=None), y=alt.Y('Percentage:Q', title='Abandon Rate (%)', scale=alt.Scale(padding=0.2)))
         
-        # --- Chart 3: Deflected Rate ---
         show_deflection = agentforce_run or (optimizations_run and 'avg_deflected_rate_optimal_baseline' in display_summary and display_summary.get('avg_deflected_rate_optimal_baseline', 0.0) > 0.01) or ('avg_deflected_rate_baseline' in display_summary and display_summary.get('avg_deflected_rate_baseline', 0.0) > 0.01)
         
-        deflected_chart = None # Initialize
+        deflected_chart = None
         if show_deflection:
-            # Layer using filtered base charts (no target line for deflection)
-            deflected_chart = alt.layer(
-                kpi_ci_area.transform_filter(alt.datum.KPI == 'Deflected Rate'), 
-                kpi_base_chart.transform_filter(alt.datum.KPI == 'Deflected Rate')
-            ).properties(
-                title='Deflection Rate with 95% Confidence Interval'
-            ).resolve_scale(y='shared').encode(
-                x=alt.X('hour:O', title='Hour of Day'), # Show axis on bottom chart
-                y=alt.Y('Percentage:Q', title='Deflected Rate (%)', scale=alt.Scale(padding=0.2))
-            )
+            deflected_chart = alt.layer(kpi_ci_area.transform_filter(alt.datum.KPI == 'Deflected Rate'), kpi_base_chart.transform_filter(alt.datum.KPI == 'Deflected Rate')).properties(title='Deflection Rate with 95% Confidence Interval').resolve_scale(y='shared').encode(x=alt.X('hour:O', title='Hour of Day'), y=alt.Y('Percentage:Q', title='Deflected Rate (%)', scale=alt.Scale(padding=0.2)))
+            final_kpi_chart = alt.vconcat(sla_chart, abandon_chart, deflected_chart).resolve_scale(y='independent')
+        else:
+             abandon_chart = abandon_chart.encode(x=alt.X('hour:O', title='Hour of Day')) 
+             final_kpi_chart = alt.vconcat(sla_chart, abandon_chart).resolve_scale(y='independent')
 
-        # --- Combine Charts Vertically ---
-        charts_to_concat = [sla_chart, abandon_chart]
-        if deflected_chart is not None:
-             charts_to_concat.append(deflected_chart)
-        elif abandon_chart is not None: # If deflection not shown, show x-axis on abandon chart
-             abandon_chart = abandon_chart.encode(x=alt.X('hour:O', title='Hour of Day'))
+        st.altair_chart(final_kpi_chart, use_container_width=True)
 
-        if charts_to_concat: # Ensure list is not empty
-             final_kpi_chart = alt.vconcat(*charts_to_concat).resolve_scale(y='independent')
-             st.altair_chart(final_kpi_chart, use_container_width=True)
-
-    # --- Show Raw Data ---
     with st.expander("Show Raw Optimization Data"):
         if display_df is not None:
              cols_to_show = ['call_rate']
@@ -962,7 +902,10 @@ if st.session_state.results_df is not None and st.session_state.summary is not N
              cols_to_show.extend([c for c in display_df.columns if c.startswith('abandon_') and not c.startswith('abandon_std') and not c.startswith('abandon_n')])
              cols_to_show.extend([c for c in display_df.columns if c.startswith('deflected_rate_') and not c.startswith('deflected_rate_std') and not c.startswith('deflected_rate_n')])
              existing_cols = [c for c in cols_to_show if c in display_df.columns]
-             st.dataframe(display_df[existing_cols])
+             # Format percentages nicely
+             format_dict = {col: '{:.1f}%' for col in existing_cols if 'sla_' in col or 'abandon_' in col or 'deflected_rate_' in col}
+             st.dataframe(display_df[existing_cols].style.format(format_dict, na_rep="-"))
+
 
 elif stage == 'initial':
      st.info("Evaluating baseline plan...")
