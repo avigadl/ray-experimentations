@@ -341,7 +341,7 @@ class StaffingOptimizer:
         self.arrival_model = CallArrivalModel(HOURLY_CALL_RATES)
     
     def evaluate_staffing_level(self, hour: int, num_agents: int,
-                               use_agentforce: bool = False) -> Tuple[float, float, bool]:
+                               use_agentforce: bool = False) -> Tuple[float, float, int, float, float, int, bool]:
         """Evaluate if staffing level meets targets for given hour"""
         rate = self.arrival_model.get_rate_for_hour(hour)
         replication_results = []
@@ -353,36 +353,47 @@ class StaffingOptimizer:
             )
             replication_results.append(metrics)
         
-        # Calculate mean metrics
-        mean_sla = np.nanmean([r['sla'] for r in replication_results])
-        mean_abandon = np.nanmean([r['abandon_rate'] for r in replication_results])
+        # Get raw results
+        sla_results = [r['sla'] for r in replication_results]
+        abandon_results = [r['abandon_rate'] for r in replication_results]
         
+        # Calculate mean, std, and n (count of non-nan)
+        mean_sla = np.nanmean(sla_results)
+        std_sla = np.nanstd(sla_results)
+        n_sla = np.sum(~np.isnan(sla_results))
+        
+        mean_abandon = np.nanmean(abandon_results)
+        std_abandon = np.nanstd(abandon_results)
+        n_abandon = np.sum(~np.isnan(abandon_results))
+
         # Check if targets met
         meets_targets = (mean_sla >= self.targets.sla_target and 
                         mean_abandon <= self.targets.abandon_target)
         
-        # Return the metrics along with the target check
-        return mean_sla, mean_abandon, meets_targets
+        # Return all stats
+        return (mean_sla, std_sla, n_sla, 
+                mean_abandon, std_abandon, n_abandon, 
+                meets_targets)
     
     def find_optimal_for_hour(self, hour: int, 
-                             use_agentforce: bool = False) -> Tuple[Optional[int], float, float]:
+                             use_agentforce: bool = False) -> Tuple[Optional[int], Tuple[float, float, int, float, float, int]]:
         """Find minimum agents needed for a specific hour, and return KPIs"""
         # Binary search for optimal staffing
         left, right = self.config.min_agents, self.config.max_agents
         optimal_agents = None
         
-        # Store the KPIs for the best-case scenario
-        best_sla = np.nan
-        best_abandon = np.nan
+        # Store the stats for the best-case scenario
+        best_stats = (np.nan, np.nan, 0, np.nan, np.nan, 0)
         
         while left <= right:
             mid = (left + right) // 2
-            mean_sla, mean_abandon, meets_targets = self.evaluate_staffing_level(hour, mid, use_agentforce)
+            (mean_sla, std_sla, n_sla, 
+             mean_abandon, std_abandon, n_abandon, 
+             meets_targets) = self.evaluate_staffing_level(hour, mid, use_agentforce)
             
             if meets_targets:
                 optimal_agents = mid
-                best_sla = mean_sla
-                best_abandon = mean_abandon
+                best_stats = (mean_sla, std_sla, n_sla, mean_abandon, std_abandon, n_abandon)
                 right = mid - 1  # Try fewer agents
             else:
                 left = mid + 1  # Need more agents
@@ -393,10 +404,10 @@ class StaffingOptimizer:
             constrained_n = max(constrained_n, self.config.min_agents) # Ensure it's at least min
             
             # Re-run evaluation for this constrained level to get its KPIs
-            mean_sla, mean_abandon, _ = self.evaluate_staffing_level(hour, constrained_n, use_agentforce)
-            return constrained_n, mean_sla, mean_abandon
+            stats = self.evaluate_staffing_level(hour, constrained_n, use_agentforce)
+            return constrained_n, stats[:6] # Return stats tuple
 
-        return optimal_agents, best_sla, best_abandon
+        return optimal_agents, best_stats
     
     def find_hourly_plan(self, use_agentforce: bool = False,
                          progress_callback: Optional[Callable] = None) -> pd.DataFrame:
@@ -404,21 +415,27 @@ class StaffingOptimizer:
         results = []
         
         for hour in range(24):
-            optimal_n, sla, abandon = self.find_optimal_for_hour(hour, use_agentforce)
+            optimal_n, stats = self.find_optimal_for_hour(hour, use_agentforce)
             constrained_n = min(optimal_n, self.config.agent_cap) if optimal_n else None
             
+            final_stats = stats
             # If constrained, we must re-evaluate KPIs for the *actual* staffed level
-            final_sla, final_abandon = sla, abandon
             if constrained_n is not None and optimal_n is not None and constrained_n < optimal_n:
-                 final_sla, final_abandon, _ = self.evaluate_staffing_level(hour, constrained_n, use_agentforce)
+                 final_stats = self.evaluate_staffing_level(hour, constrained_n, use_agentforce)[:6]
             
+            s, s_std, s_n, a, a_std, a_n = final_stats
+
             results.append({
                 'hour': hour,
                 'optimal_n': optimal_n,
                 'constrained_n': constrained_n,
                 'call_rate': HOURLY_CALL_RATES[hour],
-                'sla': final_sla,
-                'abandon_rate': final_abandon
+                'sla': s,
+                'sla_std': s_std,
+                'sla_n': s_n,
+                'abandon': a,  # <-- Renamed from abandon_rate
+                'abandon_std': a_std,
+                'abandon_n': a_n
             })
             
             if progress_callback:
@@ -431,8 +448,6 @@ class StaffingOptimizer:
 # REFACTORED MAIN FUNCTION (for Streamlit)
 # =============================================================================
 
-@st.cache_data  # <-- Cache the results of this expensive function
-@st.cache_data  # <-- Cache the results of this expensive function
 @st.cache_data  # <-- Cache the results of this expensive function
 def run_optimization(config: SimulationConfig, targets: TargetKPIs) -> Tuple[pd.DataFrame, Dict[str, float]]:
     """
@@ -481,21 +496,34 @@ def run_optimization(config: SimulationConfig, targets: TargetKPIs) -> Tuple[pd.
             'optimal_n': 'optimal_baseline',
             'constrained_n': 'constrained_baseline',
             'sla': 'sla_baseline',
-            'abandon_rate': 'abandon_baseline'
+            'sla_std': 'sla_std_baseline',
+            'sla_n': 'sla_n_baseline',
+            'abandon': 'abandon_baseline',
+            'abandon_std': 'abandon_std_baseline',
+            'abandon_n': 'abandon_n_baseline'
         })
         
         agentforce_plan = agentforce_plan.rename(columns={
             'optimal_n': 'optimal_agentforce',
             'constrained_n': 'constrained_agentforce',
             'sla': 'sla_agentforce',
-            'abandon_rate': 'abandon_agentforce'
+            'sla_std': 'sla_std_agentforce',  # <-- THE FIX IS HERE
+            'sla_n': 'sla_n_agentforce',
+            'abandon': 'abandon_agentforce',
+            'abandon_std': 'abandon_std_agentforce',
+            'abandon_n': 'abandon_n_agentforce'
         })
 
+        # Define the specific columns to join from the agentforce plan
+        # This avoids the 'call_rate' conflict
+        agentforce_cols_to_join = [
+            'optimal_agentforce', 'constrained_agentforce',
+            'sla_agentforce', 'sla_std_agentforce', 'sla_n_agentforce',
+            'abandon_agentforce', 'abandon_std_agentforce', 'abandon_n_agentforce'
+        ]
+
         # Join the two dataframes
-        combined = baseline_plan.join(agentforce_plan[[
-            'optimal_agentforce', 'constrained_agentforce', 
-            'sla_agentforce', 'abandon_agentforce'
-        ]])
+        combined = baseline_plan.join(agentforce_plan[agentforce_cols_to_join])
         
         
         # Calculate savings
@@ -660,15 +688,33 @@ if st.button("🚀 Run Optimization", type="primary"):
     st.header("Hourly KPI Comparison (SLA & Abandon Rate)")
 
     # --- Prepare data for KPI chart ---
-    kpi_data = combined_df.reset_index().melt(
-        id_vars=['hour'],
-        value_vars=['sla_baseline', 'sla_agentforce', 'abandon_baseline', 'abandon_agentforce'],
-        var_name='Metric',
-        value_name='Percentage'
-    )
     
-    # Split the 'Metric' column into two: 'KPI' (SLA/Abandon) and 'Plan' (Baseline/Agentforce)
-    kpi_data[['KPI', 'Plan']] = kpi_data['Metric'].str.split('_', expand=True)
+    # 1. Transform from "wide" (sla_baseline, sla_agentforce) to "long"
+    df = combined_df.reset_index()
+    df = pd.wide_to_long(df, 
+                         stubnames=['sla', 'sla_std', 'sla_n', 'abandon', 'abandon_std', 'abandon_n'], 
+                         i='hour', 
+                         j='Plan', 
+                         sep='_', 
+                         suffix='(baseline|agentforce)').reset_index()
+
+    # 2. Stack SLA and Abandon stats into a single tidy dataframe
+    sla_df = df[['hour', 'Plan', 'sla', 'sla_std', 'sla_n']].copy()
+    sla_df['KPI'] = 'SLA'
+    sla_df = sla_df.rename(columns={'sla': 'Percentage', 'sla_std': 'StdDev', 'sla_n': 'N'})
+
+    abandon_df = df[['hour', 'Plan', 'abandon', 'abandon_std', 'abandon_n']].copy()
+    abandon_df['KPI'] = 'Abandon'
+    abandon_df = abandon_df.rename(columns={'abandon': 'Percentage', 'abandon_std': 'StdDev', 'abandon_n': 'N'})
+
+    kpi_data = pd.concat([sla_df, abandon_df])
+    
+    # 3. Calculate 95% Confidence Interval
+    kpi_data['StdErr'] = kpi_data['StdDev'] / np.sqrt(kpi_data['N'])
+    kpi_data['CI_Margin'] = 1.96 * kpi_data['StdErr']
+    kpi_data['CI_Lower'] = (kpi_data['Percentage'] - kpi_data['CI_Margin']).clip(lower=0)
+    kpi_data['CI_Upper'] = kpi_data['Percentage'] + kpi_data['CI_Margin']
+
 
     # --- Define Colors ---
     salesforce_blue = "#0070D2"
@@ -677,51 +723,83 @@ if st.button("🚀 Run Optimization", type="primary"):
     # --- Chart 1: SLA ---
     
     # Filter data for SLA
-    sla_data = kpi_data[kpi_data['KPI'] == 'sla']
+    sla_data = kpi_data[kpi_data['KPI'] == 'SLA'].copy()
     
     # SLA Target line
     sla_target_line = alt.Chart(pd.DataFrame({'y': [targets.sla_target]})) \
         .mark_rule(color='green', strokeDash=[5,5], size=2) \
         .encode(y='y:Q', tooltip=alt.value(f'SLA Target: {targets.sla_target}%'))
 
-    # SLA Line chart
-    sla_lines = alt.Chart(sla_data).mark_line(point=True).encode(
+    # SLA 95% Confidence Interval Area
+    sla_ci_area = alt.Chart(sla_data).mark_area(opacity=0.3).encode(
         x=alt.X('hour:O', title='Hour of Day'),
-        y=alt.Y('Percentage:Q', title='SLA (%)', scale=alt.Scale(domainMin=0, padding=0.2)),
+        y=alt.Y('CI_Lower:Q', title='SLA (%)'),
+        y2=alt.Y2('CI_Upper:Q'),
         color=alt.Color('Plan:N', 
                         scale={'domain': ['baseline', 'agentforce'],
                                'range': [salesforce_blue, salesforce_gray]}),
-        tooltip=['hour', 'Plan', 'Percentage']
+        tooltip=[
+            alt.Tooltip('hour:O'),
+            alt.Tooltip('Plan:N'),
+            alt.Tooltip('Percentage:Q', format='.1f', title='Mean SLA'),
+            alt.Tooltip('CI_Lower:Q', format='.1f', title='95% CI Lower'),
+            alt.Tooltip('CI_Upper:Q', format='.1f', title='95% CI Upper')
+        ]
+    )
+
+    # SLA Mean Line
+    sla_lines = alt.Chart(sla_data).mark_line(point=True).encode(
+        x=alt.X('hour:O'),
+        y=alt.Y('Percentage:Q'),
+        color=alt.Color('Plan:N')
     ).interactive()
 
-    # Layer SLA chart and target line
-    sla_chart = alt.layer(sla_lines, sla_target_line).properties(
-        title='Service Level Agreement (SLA)'
+    # Layer SLA chart, CI, and target line
+    sla_chart = alt.layer(sla_ci_area, sla_lines, sla_target_line).properties(
+        title='Service Level Agreement (SLA) with 95% Confidence Interval'
+    ).resolve_scale(
+        y='shared' # Ensure all layers use the same Y axis
     )
 
     # --- Chart 2: Abandon Rate ---
 
     # Filter data for Abandon
-    abandon_data = kpi_data[kpi_data['KPI'] == 'abandon']
+    abandon_data = kpi_data[kpi_data['KPI'] == 'Abandon'].copy()
 
     # Abandon Target line
     abandon_target_line = alt.Chart(pd.DataFrame({'y': [targets.abandon_target]})) \
         .mark_rule(color='red', strokeDash=[5,5], size=2) \
         .encode(y='y:Q', tooltip=alt.value(f'Abandon Target: {targets.abandon_target}%'))
 
-    # Abandon Line chart
-    abandon_lines = alt.Chart(abandon_data).mark_line(point=True).encode(
+    # Abandon 95% Confidence Interval Area
+    abandon_ci_area = alt.Chart(abandon_data).mark_area(opacity=0.3).encode(
         x=alt.X('hour:O', title='Hour of Day'),
-        y=alt.Y('Percentage:Q', title='Abandon Rate (%)', scale=alt.Scale(domainMin=0, padding=0.2)),
+        y=alt.Y('CI_Lower:Q', title='Abandon Rate (%)'),
+        y2=alt.Y2('CI_Upper:Q'),
         color=alt.Color('Plan:N', 
                         scale={'domain': ['baseline', 'agentforce'],
                                'range': [salesforce_blue, salesforce_gray]}),
-        tooltip=['hour', 'Plan', 'Percentage']
+        tooltip=[
+            alt.Tooltip('hour:O'),
+            alt.Tooltip('Plan:N'),
+            alt.Tooltip('Percentage:Q', format='.1f', title='Mean Abandon'),
+            alt.Tooltip('CI_Lower:Q', format='.1f', title='95% CI Lower'),
+            alt.Tooltip('CI_Upper:Q', format='.1f', title='95% CI Upper')
+        ]
+    )
+    
+    # Abandon Mean Line
+    abandon_lines = alt.Chart(abandon_data).mark_line(point=True).encode(
+        x=alt.X('hour:O'),
+        y=alt.Y('Percentage:Q'),
+        color=alt.Color('Plan:N')
     ).interactive()
     
-    # Layer Abandon chart and target line
-    abandon_chart = alt.layer(abandon_lines, abandon_target_line).properties(
-        title='Abandon Rate'
+    # Layer Abandon chart, CI, and target line
+    abandon_chart = alt.layer(abandon_ci_area, abandon_lines, abandon_target_line).properties(
+        title='Abandon Rate with 95% Confidence Interval'
+    ).resolve_scale(
+        y='shared' # Ensure all layers use the same Y axis
     )
 
     # Combine the two charts vertically
