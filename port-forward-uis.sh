@@ -44,6 +44,10 @@ echo "Ray Serve: http://localhost:8080"
 kubectl port-forward service/raycluster-latest-head-svc  -n ray 8000:8000 &
 
 
+# Ray Client Jobss
+echo "Ray Serve: http://localhost:10001"
+kubectl port-forward service/raycluster-latest-head-svc  -n ray 10001:10001 &
+
 
 echo ""
 echo "========================================"
